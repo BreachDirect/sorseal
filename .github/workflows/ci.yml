@@ -42,7 +42,7 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
       - name: Build (locked to committed Cargo.lock)
         run: cargo build --locked
-      - name: Run test suite (unit + e2e: record/verify against the echo fixture)
+      - name: Run test suite (unit + e2e against the echo fixture)
         run: cargo test --locked
 
   smoke:
