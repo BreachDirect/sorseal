@@ -1,0 +1,55 @@
+name: Bug report
+description: Report a bug in sorseal
+title: "[bug]: "
+labels: [bug, triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to fill out this bug report.
+  - type: input
+    id: version
+    attributes:
+      label: sorseal version
+      description: Commit hash, tag, or crate version
+      placeholder: "main@abc1234 or v0.1.0"
+    validations:
+      required: true
+  - type: input
+    id: rustc
+    attributes:
+      label: Rust version
+      description: Output of `rustc --version`
+      placeholder: "rustc 1.95.0"
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal `sorseal.toml` or fixture that triggers the bug, plus the command you ran
+      placeholder: |
+        `sorseal record`
+        `sorseal verify`
+        ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs actual behaviour
+      description: Include exit codes and relevant output (console, JSON, or Markdown)
+    validations:
+      required: true
+  - type: dropdown
+    id: impact
+    attributes:
+      label: Impact
+      options:
+        - False pass (verify succeeded but should not have)
+        - False fail (verify failed but should have passed)
+        - Crash / panic
+        - Broken output (report)
+        - Other
+    validations:
+      required: true

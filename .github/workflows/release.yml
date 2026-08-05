@@ -1,0 +1,27 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build release binary (locked to committed Cargo.lock)
+        run: cargo build --release --locked
+      - name: Attach binary to GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            target/release/sorseal \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "sorseal $GITHUB_REF_NAME" \
+            --notes "Built from \`$GITHUB_SHA\` with \`cargo build --release --locked\`."

@@ -1,0 +1,11 @@
+# sorseal.toml — declares the artifacts sorseal will build, hash, and seal.
+# Fixture used by tests/e2e.rs and the CI smoke job.
+
+[project]
+name = "echo"
+
+[[artifacts]]
+id = "echo"
+build_command = "cargo build --release --target wasm32-unknown-unknown"
+wasm_path = "target/wasm32-unknown-unknown/release/echo.wasm"
+source_root = "."

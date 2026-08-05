@@ -1,0 +1,35 @@
+[package]
+name = "sorseal"
+version = "0.1.0"
+edition = "2021"
+description = "Provenance for Soroban/WASM artifacts — prove deployed bytecode matches source."
+license = "MIT"
+authors = ["BreachDirect"]
+rust-version = "1.85"
+repository = "https://github.com/BreachDirect/sorseal"
+readme = "README.md"
+keywords = ["soroban", "stellar", "wasm", "provenance", "reproducible-builds"]
+categories = ["development-tools::build-utils", "command-line-utilities"]
+
+[lib]
+name = "sorseal"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sorseal"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+toml = "0.8"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+strip = true

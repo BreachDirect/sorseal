@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Lint with warnings denied
+        run: cargo clippy --all-targets -- -D warnings
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Add wasm32-unknown-unknown target (fixture e2e)
+        run: rustup target add wasm32-unknown-unknown
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+      - name: Build (locked to committed Cargo.lock)
+        run: cargo build --locked
+      - name: Run test suite (unit + e2e: record/verify against the echo fixture)
+        run: cargo test --locked
+
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Add wasm32-unknown-unknown target (fixture build)
+        run: rustup target add wasm32-unknown-unknown
+      - name: Build release binary (locked)
+        run: cargo build --release --locked
+      - name: Smoke — CLI boots, scaffolds, and seals+verifies the fixture
+        run: |
+          ./target/release/sorseal --version
+          tmpdir=$(mktemp -d)
+          cd "$tmpdir"
+          "$GITHUB_WORKSPACE/target/release/sorseal" init --project demo
+          test -f sorseal.toml
+          cp -r "$GITHUB_WORKSPACE/tests/fixtures/echo/." "$tmpdir/echo"
+          cd "$tmpdir/echo"
+          "$GITHUB_WORKSPACE/target/release/sorseal" record
+          rm -rf target
+          "$GITHUB_WORKSPACE/target/release/sorseal" verify
+          echo "smoke ok"

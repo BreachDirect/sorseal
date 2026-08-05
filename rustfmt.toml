@@ -1,0 +1,3 @@
+# Rustfmt configuration for the sorseal project.
+edition = "2021"
+max_width = 100
