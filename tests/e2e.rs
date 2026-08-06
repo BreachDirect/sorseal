@@ -137,6 +137,74 @@ fn verify_detects_corrupted_provenance() {
 }
 
 #[test]
+fn keygen_sign_and_verify_attestation_roundtrip() {
+    let tmp = tempfile::tempdir().unwrap();
+    copy_fixture(tmp.path());
+    assert!(run(tmp.path(), &["record"]).status.success());
+
+    // generate a keypair
+    let kg = run(tmp.path(), &["keygen", "--key", "test.key"]);
+    assert!(kg.status.success(), "keygen failed:\n{}", stdout(&kg));
+    assert!(tmp.path().join("test.key").exists());
+    assert!(tmp.path().join("test.pub").exists());
+
+    // sign the provenance into a DSSE attestation
+    let sg = run(tmp.path(), &["sign", "--key", "test.key"]);
+    assert!(sg.status.success(), "sign failed:\n{}", stdout(&sg));
+    assert!(tmp.path().join("sorseal.attestation.json").exists());
+
+    // verify the attestation against the public key and provenance
+    let va = run(
+        tmp.path(),
+        &["verify-attestation", "--public-key", "test.pub"],
+    );
+    assert!(
+        va.status.success(),
+        "verify-attestation failed:\n{}",
+        stdout(&va)
+    );
+    assert!(stdout(&va).contains("signature verified"));
+
+    // tampering with the provenance must fail subject cross-check
+    let mut prov = provenance(tmp.path());
+    prov["artifacts"][0]["wasm_sha256"] = "0".repeat(64).into();
+    let prov_path = tmp.path().join("sorseal.provenance.json");
+    fs::write(&prov_path, prov.to_string()).unwrap();
+    let va2 = run(
+        tmp.path(),
+        &["verify-attestation", "--public-key", "test.pub"],
+    );
+    assert_eq!(va2.status.code(), Some(1));
+    assert!(stdout(&va2).contains("do NOT match"));
+}
+
+#[test]
+fn verify_emits_valid_sarif() {
+    let tmp = tempfile::tempdir().unwrap();
+    copy_fixture(tmp.path());
+    assert!(run(tmp.path(), &["record"]).status.success());
+
+    // corrupt the provenance so verify produces a finding
+    let mut prov = provenance(tmp.path());
+    prov["artifacts"][0]["wasm_sha256"] = "0".repeat(64).into();
+    fs::write(tmp.path().join("sorseal.provenance.json"), prov.to_string()).unwrap();
+
+    let ver = run(tmp.path(), &["verify", "--sarif", "out.sarif"]);
+    assert_eq!(ver.status.code(), Some(1));
+    let sarif_path = tmp.path().join("out.sarif");
+    assert!(sarif_path.exists());
+    let text = fs::read_to_string(&sarif_path).unwrap();
+    let sarif: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(sarif["version"], "2.1.0");
+    let results = sarif["runs"][0]["results"].as_array().unwrap();
+    assert!(
+        !results.is_empty(),
+        "expected findings in SARIF for corrupted provenance"
+    );
+    assert_eq!(results[0]["level"], "error");
+}
+
+#[test]
 fn init_writes_valid_manifest() {
     let tmp = tempfile::tempdir().unwrap();
     let rec = run(tmp.path(), &["init", "--project", "demo"]);

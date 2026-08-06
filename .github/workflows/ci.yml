@@ -77,3 +77,37 @@ jobs:
           rm -rf target
           "$GITHUB_WORKSPACE/target/release/sorseal" verify
           echo "smoke ok"
+
+  action:
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Add wasm32-unknown-unknown target
+        run: rustup target add wasm32-unknown-unknown
+      - name: Build release binary (locked)
+        run: cargo build --release --locked
+      - name: Seed a sealed fixture the action will verify
+        run: |
+          mkdir -p dogfood
+          cp -r tests/fixtures/echo/. dogfood/
+          printf 'target/\nsorseal.provenance.json\nsorseal.sarif\n' > dogfood/.gitignore
+          cd dogfood
+          git init -q
+          git config user.email ci@example.com
+          git config user.name "Sorseal CI"
+          git add .
+          git commit -q -m "seed dogfood fixture"
+          "$GITHUB_WORKSPACE/target/release/sorseal" record
+          test -f sorseal.provenance.json
+          echo "sealed fixture ready"
+      - name: Run the sorseal action (dogfood)
+        uses: ./
+        with:
+          working-directory: dogfood
+          sarif-file: sorseal.sarif
+      - name: Verify SARIF was produced and is valid JSON
+        run: |
+          python3 -c "import json; d=json.load(open('dogfood/sorseal.sarif')); assert d['version']=='2.1.0'; assert d['runs'][0]['results']==[], 'expected clean verify'; print('sarif ok:', d['runs'][0]['tool']['driver']['name'])"

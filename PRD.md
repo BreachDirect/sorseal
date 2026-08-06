@@ -31,11 +31,23 @@ CI-friendly way to prove deployed bytecode matches source.
 - **Zero dependency on sibling tools** — sorseal must make sense and function
   on its own for any Rust/Soroban project.
 
-## Non-goals (Phase 1)
+## Goals (Phase 2 — shipped)
 
-- Signing/notary-style attestations (Phase 3).
-- SLSA full attestation metadata (Phase 4).
-- A web dashboard or drift history (Phase 5).
+- **GitHub Action** — a reusable composite action that runs `verify` in any
+  repository and surfaces failures in CI (optional SARIF upload to code
+  scanning).
+- **SARIF output** — `verify --sarif` emits a SARIF 2.1.0 report mapping each
+  check to a scan result.
+- **Signed attestations** — Ed25519-signed in-toto Statements (SLSA v1.0
+  predicate, DSSE envelope) so releases can be authenticated by public key
+  alone.
+- **On-chain verification** — prove a deployed contract's ledger WASM hash
+  matches the sealed provenance by querying Soroban RPC directly.
+
+## Non-goals
+
+- OIDC-based CI signing (no trusted third party at runtime).
+- A web dashboard or drift history.
 - Language support beyond Rust/Cargo-built artifacts.
 
 ## Success criteria
@@ -43,13 +55,20 @@ CI-friendly way to prove deployed bytecode matches source.
 1. `sorseal record` then `sorseal verify` (after wiping build output) exits 0.
 2. Any source change, corrupted provenance, or moved-away git history fails
    `verify` with exit 1 and a clear message.
-3. `cargo fmt`, `cargo clippy -D warnings`, and `cargo test` all green in CI.
+3. `cargo fmt`, `cargo clippy -D warnings`, and `cargo test` all green in CI on
+   stable and MSRV 1.85.
 4. The e2e fixture (`tests/fixtures/echo`) builds bit-reproducibly on CI.
 5. Standalone: `sorseal init` scaffolds a working manifest for a fresh project
    with no input from other Wave tools.
+6. `keygen` → `sign` → `verify-attestation` round-trips; a tampered attestation
+   or provenance fails verification.
+7. `onchain-verify` fetches and decodes a live contract instance and matches
+   the sealed wasm hash (verified against a real testnet deployment in tests).
 
 ## Out of scope
 
-Anything that requires network access at runtime (all hashing is local and
-offline). The tool must not make assumptions about how the user deploys — it
-only asserts reproducibility of the declared artifacts.
+Anything that requires network access at runtime for the core path (all hashing
+is local and offline; the only networked command is the explicitly on-chain
+`onchain-verify`). The tool must not make assumptions about how the user deploys
+— it only asserts reproducibility of the declared artifacts and, on request,
+equivalence with what is actually deployed.

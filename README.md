@@ -26,6 +26,14 @@ no dependency on other tools in the Stellar Wave toolchain.
   readable answer to "what source, toolchain, and commit produced this bytecode?"
 - **CI-friendly.** `sorseal verify` exits non-zero on any mismatch — drop it into
   a release pipeline to gate deploys on reproducible, source-matching bytecode.
+- **Reusable GitHub Action.** A composite action wraps `sorseal verify` with
+  SARIF output for GitHub code scanning, so the gate is one `uses:` away.
+- **Signed supply-chain records.** Attestations are signed with Ed25519 as
+  in-toto Statements (SLSA v1.0 predicate, DSSE envelope) — a public key is all
+  a verifier needs to trust a release.
+- **On-chain verification.** `onchain-verify` reads the deployed contract's WASM
+  hash straight off Stellar's ledger (mainnet or testnet) and proves it matches
+  your sealed provenance — no trusted third party.
 
 ## Quick start
 
@@ -99,9 +107,15 @@ careless edit can't silently diverge the source from what was shipped.
 ```
 sorseal init                    Scaffold a sorseal.toml manifest
 sorseal record [--allow-dirty]  Build artifacts and write sorseal.provenance.json
-sorseal verify                  Rebuild and verify against the sealed provenance
+sorseal verify [--sarif FILE]   Rebuild and verify against the sealed provenance
 sorseal report [--format console|json|markdown]
                                 Render the provenance as a deliverable report
+sorseal keygen                  Generate an Ed25519 keypair for signing attestations
+sorseal sign --key KEY          Sign the provenance as an in-toto/SLSA attestation
+sorseal verify-attestation --public-key KEY
+                                Verify an attestation signature (and subjects)
+sorseal onchain-verify --contract-id C...
+                                Compare the deployed on-chain wasm hash to provenance
 ```
 
 `record` refuses to seal a **dirty working tree** unless `--allow-dirty` is
@@ -109,6 +123,71 @@ passed — a seal is only meaningful if it describes exactly the committed sourc
 
 `report --format markdown` emits a table suitable for a release deliverable or
 audit appendix.
+
+## Supply-chain attestations
+
+The provenance alone proves a rebuild matches a seal; an attacker who can edit
+the repo can re-seal. Signing closes that: a release is only trustworthy if it
+was sealed under a key the release authority controls.
+
+```bash
+# Generate a keypair (private key stays local; share only the public key)
+sorseal keygen --key release.key --public-key release.pub
+
+# After `sorseal record`, sign the provenance:
+sorseal sign --key release.key
+
+# A verifier with only the public key can check the signature:
+sorseal verify-attestation --public-key release.pub
+# PASSED  attestation :: signature — Ed25519 signature valid for release.pub
+# PASSED  attestation :: subjects — subject digests match sorseal.provenance.json
+```
+
+Attestations are written as [DSSE envelopes](https://github.com/secure-systems-lab/dsse)
+wrapping an [in-toto Statement](https://github.com/in-toto/attestation) with an
+SLSA v1.0 predicate, so they are interoperable with standard supply-chain
+tooling. `verify-attestation` exits non-zero on a bad signature or — when the
+provenance is given — on any subject mismatch.
+
+## On-chain verification
+
+`onchain-verify` queries the Stellar ledger directly (no trusted gateway) for
+the WASM hash currently deployed at a contract address and compares it to the
+hash sealed in the provenance:
+
+```bash
+# Mainnet (default) or testnet, by C... strkey or 64-char hex:
+sorseal onchain-verify --contract-id C... --rpc https://soroban-testnet.stellar.org
+
+# PASSED  contract :: wasm hash — deployed bytecode matches sealed provenance
+#         deployed sha256 ccedd7ac...e430
+#         sealed   sha256 ccedd7ac...e430
+```
+
+It reads the contract's `SCV_LEDGER_KEY_CONTRACT_INSTANCE` ledger entry via the
+Soroban RPC `getLedgerEntries` method and decodes the embedded
+`ContractExecutable` WASM hash — the same primitive a client downloads to
+invoke the contract. Exit codes follow the `verify` convention (0 pass / 1
+mismatch / 2 error).
+
+## GitHub Action
+
+A reusable composite action wraps `sorseal verify` so any repository can gate
+its release pipeline on provenance in one step:
+
+```yaml
+- name: Verify sealed provenance
+  uses: BreachDirect/sorseal@v1
+  with:
+    working-directory: contracts/escrow
+    sarif-file: sorseal.sarif
+```
+
+- Inputs: `working-directory`, `manifest`, `provenance`, `sarif-file`, `toolchain`.
+- Outputs: `passed` (`true`/`false`).
+- When `sarif-file` is set, the results are uploaded to **GitHub code scanning**
+  via `github/codeql-action/upload-sarif@v3`, so non-reproducible builds surface
+  as security alerts.
 
 ## Project docs
 
@@ -118,9 +197,10 @@ audit appendix.
 
 ## Roadmap
 
-Phase 1 (this release) ships the core CLI: init, record, verify, and report.
-Planned phases — a reusable GitHub Action and SARIF output, signed provenance
-(Ed25519), and SLSA-style attestation metadata — are tracked as issues in this
+Phase 1 (core CLI: init, record, verify, report) and Phase 2 (GitHub Action +
+SARIF, Ed25519/DSSE signed attestations, and on-chain WASM verification) are
+shipped. Planned follow-ups — CI provenance signing from OIDC identities,
+multi-signer rotation, and a verification API — are tracked as issues in this
 repo.
 
 ## Wave alignment

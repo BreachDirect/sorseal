@@ -1,0 +1,86 @@
+name: 'sorseal'
+description: >-
+  Prove that your Soroban/WASM contract artifacts match the sealed provenance
+  record. Runs `sorseal verify` in CI and can upload the results to GitHub
+  code scanning as SARIF.
+author: BreachDirect
+branding:
+  icon: 'shield'
+  color: 'blue'
+
+inputs:
+  working-directory:
+    description: >-
+      Directory (relative to the repository root) that contains the sorseal
+      manifest and sealed provenance. Defaults to the repository root.
+    required: false
+    default: '.'
+  manifest:
+    description: >-
+      Path to the sorseal.toml manifest, relative to `working-directory`.
+    required: false
+    default: 'sorseal.toml'
+  provenance:
+    description: >-
+      Path to the sealed sorseal.provenance.json, relative to `working-directory`.
+    required: false
+    default: 'sorseal.provenance.json'
+  sarif-file:
+    description: >-
+      Path to write the SARIF report (relative to `working-directory`). When
+      set, the action uploads it to GitHub code scanning automatically.
+    required: false
+    default: ''
+  toolchain:
+    description: >-
+      Rust toolchain to use for the standalone build. Defaults to stable.
+    required: false
+    default: 'stable'
+
+outputs:
+  passed:
+    description: >-
+      'true' when every provenance check passed, 'false' otherwise.
+    value: ${{ steps.verify.outputs.passed }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: ${{ inputs.toolchain }}
+
+    - name: Add wasm32-unknown-unknown target
+      shell: bash
+      run: rustup target add wasm32-unknown-unknown
+
+    - name: Build sorseal from source
+      shell: bash
+      run: |
+        cargo build --release --locked --manifest-path "${{ github.action_path }}/Cargo.toml"
+        mkdir -p "$RUNNER_TOOL_CACHE/sorseal"
+        cp "${{ github.action_path }}/target/release/sorseal" "$RUNNER_TOOL_CACHE/sorseal/sorseal"
+        echo "$RUNNER_TOOL_CACHE/sorseal" >> "$GITHUB_PATH"
+
+    - name: Verify provenance
+      id: verify
+      shell: bash
+      working-directory: ${{ github.workspace }}/${{ inputs.working-directory }}
+      run: |
+        args=(--manifest "${{ inputs.manifest }}" --provenance "${{ inputs.provenance }}")
+        if [ -n "${{ inputs.sarif-file }}" ]; then
+          args+=(--sarif "${{ inputs.sarif-file }}")
+        fi
+        if sorseal verify "${args[@]}"; then
+          echo "passed=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "passed=false" >> "$GITHUB_OUTPUT"
+          exit 1
+        fi
+
+    - name: Upload SARIF to code scanning
+      if: inputs.sarif-file != '' && always()
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: ${{ github.workspace }}/${{ inputs.working-directory }}/${{ inputs.sarif-file }}
