@@ -25,6 +25,12 @@ pub fn render_sarif(project: &str, checks: &[Check]) -> String {
                 "message": {
                     "text": format!("{} :: {} — {}", c.artifact, c.check, c.detail)
                 },
+                "locations": [{
+                    "physicalLocation": {
+                        "artifactLocation": { "uri": "sorseal.provenance.json" },
+                        "region": { "startLine": 1 }
+                    }
+                }],
                 "properties": {
                     "artifact": c.artifact,
                     "check": c.check,

@@ -32,8 +32,10 @@ no dependency on other tools in the Stellar Wave toolchain.
   in-toto Statements (SLSA v1.0 predicate, DSSE envelope) — a public key is all
   a verifier needs to trust a release.
 - **On-chain verification.** `onchain-verify` reads the deployed contract's WASM
-  hash straight off Stellar's ledger (mainnet or testnet) and proves it matches
-  your sealed provenance — no trusted third party.
+  hash straight off Stellar's ledger (mainnet or testnet) via Soroban RPC and
+  proves it matches your sealed provenance. No gateway or dashboard is involved
+  — the only trust point is the RPC endpoint itself, so you can point it at your
+  own node.
 
 ## Quick start
 
@@ -87,13 +89,17 @@ source_root = "."
 - **`wasm_sha256`** — SHA-256 of the built artifact (e.g. the contract WASM)
 - **`source_sha256`** — SHA-256 of the source tree (`source_root`), keyed on
   relative path + file bytes, sorted for determinism, excluding `.git/`,
-  `target/`, and the provenance file itself
+  `target/`, and sorseal's own generated outputs (the provenance file, signed
+  attestation, key files, and any `.sarif` report) — so a seal never depends on
+  its own outputs
 - **toolchain** — `rustc --version` of the compiler used
 - **git state** — the current commit and cleanliness, when in a git repo
 
 `verify` reruns every `build_command` in the current tree and compares each
 digest against the sealed record. It also confirms the sealed commit is
-reachable from the current `HEAD`.
+reachable from the current `HEAD`, and that each manifest `build_command` still
+matches the command the seal was produced with (so a changed build config can't
+silently describe a different build).
 
 ### Why both a WASM *and* a source digest?
 

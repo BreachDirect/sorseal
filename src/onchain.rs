@@ -49,10 +49,14 @@ fn wasm_hash_from_entry(entry_b64: &str) -> Result<Option<[u8; 32]>> {
     // ContractDataEntry { ExtensionPoint ext, SCAddress contract, SCVal key,
     //   ContractDataDurability durability, SCVal val }
     read_u32(&mut cur, "ExtensionPoint")?; // ext (void = 0)
-    read_u32(&mut cur, "SCAddress type")?; // SC_ADDRESS_TYPE_CONTRACT = 1
+    expect_tag(&mut cur, XDR_TAG_SC_ADDRESS_TYPE_CONTRACT, "SCAddress type")?;
     take(&mut cur, 32, "SCAddress contract id")?;
-    read_u32(&mut cur, "SCVal key type")?; // SCV_LEDGER_KEY_CONTRACT_INSTANCE = 20
-    read_u32(&mut cur, "durability")?; // PERSISTENT = 1
+    expect_tag(
+        &mut cur,
+        XDR_TAG_SCV_LEDGER_KEY_CONTRACT_INSTANCE,
+        "SCVal key type",
+    )?;
+    expect_tag(&mut cur, XDR_TAG_DURABILITY_PERSISTENT, "durability")?;
     expect_tag(&mut cur, XDR_TAG_SCV_CONTRACT_INSTANCE, "SCVal val type")?;
 
     // SCContractInstance { ContractExecutable executable, SCMap* storage }
@@ -166,6 +170,9 @@ pub fn fetch_deployed_wasm_hash(rpc_url: &str, contract_id: &str) -> Result<Stri
 }
 
 fn hex_to_bytes(hex: &str) -> Result<[u8; 32]> {
+    if hex.len() != 64 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        bail!("invalid hex contract id: must be exactly 64 hex chars");
+    }
     let mut out = [0u8; 32];
     for (i, byte) in (0..hex.len()).step_by(2).enumerate() {
         out[i] = u8::from_str_radix(&hex[byte..byte + 2], 16)
@@ -178,19 +185,21 @@ fn hex_to_bytes(hex: &str) -> Result<[u8; 32]> {
 /// C... strkey; return the normalized 64-char hex form used by the RPC.
 pub fn normalize_contract_id(id: &str) -> Result<String> {
     let id = id.trim();
+    let hex = id.strip_prefix("0x").unwrap_or(id);
+    // A 64-char hex id is unambiguous — and uppercase 'C' is a valid hex
+    // digit, so check hex first to avoid misrouting it to the strkey path.
+    if hex.len() == 64 && hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Ok(hex.to_ascii_lowercase());
+    }
     if id.starts_with('C') {
         let contract = Contract::from_string(id)
             .map_err(|e| anyhow!("invalid contract strkey '{id}': {e}"))?;
         return Ok(digest::hex(&contract.0));
     }
-    let hex = id.strip_prefix("0x").unwrap_or(id);
-    if hex.len() != 64 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
-        bail!(
-            "contract id must be a C... strkey or 64 hex chars, got '{}'",
-            id
-        );
-    }
-    Ok(hex.to_ascii_lowercase())
+    bail!(
+        "contract id must be a C... strkey or 64 hex chars, got '{}'",
+        id
+    )
 }
 
 /// Result of one on-chain check.
@@ -264,6 +273,22 @@ mod tests {
         assert_eq!(normalize_contract_id(&format!("0x{hex}")).unwrap(), hex);
         assert!(normalize_contract_id("garbage").is_err());
         assert!(normalize_contract_id(&"abcd".repeat(15)).is_err());
+    }
+
+    #[test]
+    fn normalize_accepts_uppercase_hex_starting_with_c() {
+        // Uppercase 'C' is a valid hex digit: a 64-char hex id that happens to
+        // start with 'C' must be treated as hex, not mistaken for a strkey.
+        let hex = format!("C{}0", "ab".repeat(31).to_uppercase());
+        assert_eq!(hex.len(), 64);
+        assert_eq!(
+            normalize_contract_id(&hex).unwrap(),
+            hex.to_ascii_lowercase()
+        );
+        assert_eq!(
+            normalize_contract_id(&format!("0x{hex}")).unwrap(),
+            hex.to_ascii_lowercase()
+        );
     }
 
     #[test]

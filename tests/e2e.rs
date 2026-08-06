@@ -179,6 +179,57 @@ fn keygen_sign_and_verify_attestation_roundtrip() {
 }
 
 #[test]
+fn sign_then_verify_still_reproduces() {
+    // The documented flow: record -> keygen -> sign -> verify. The attestation
+    // and keys live in the tree but are generated outputs — they must not
+    // change the source fingerprint, or verify would spuriously fail.
+    let tmp = tempfile::tempdir().unwrap();
+    copy_fixture(tmp.path());
+    assert!(run(tmp.path(), &["record"]).status.success());
+    assert!(run(tmp.path(), &["keygen"]).status.success());
+    assert!(run(tmp.path(), &["sign", "--key", "sorseal.key"])
+        .status
+        .success());
+    assert!(tmp.path().join("sorseal.attestation.json").exists());
+
+    fs::remove_dir_all(tmp.path().join("target")).unwrap();
+    let ver = run(tmp.path(), &["verify"]);
+    assert!(
+        ver.status.success(),
+        "verify after sign must still pass:\n{}",
+        stdout(&ver)
+    );
+}
+
+#[test]
+fn verify_detects_changed_build_command() {
+    let tmp = tempfile::tempdir().unwrap();
+    copy_fixture(tmp.path());
+    assert!(run(tmp.path(), &["record"]).status.success());
+
+    // Change the build command while keeping the produced wasm identical: the
+    // sealed record no longer describes how the artifact is built.
+    let man_path = tmp.path().join("sorseal.toml");
+    let man = fs::read_to_string(&man_path).unwrap();
+    fs::write(
+        &man_path,
+        man.replace(
+            "build_command = \"cargo build --release --target wasm32-unknown-unknown\"",
+            "build_command = \"cargo build --release --target wasm32-unknown-unknown && true\"",
+        ),
+    )
+    .unwrap();
+
+    let ver = run(tmp.path(), &["verify"]);
+    assert_eq!(ver.status.code(), Some(1));
+    let out = stdout(&ver);
+    assert!(
+        out.contains("command") && out.contains("FAILED"),
+        "expected a failed command-consistency check, got:\n{out}"
+    );
+}
+
+#[test]
 fn verify_emits_valid_sarif() {
     let tmp = tempfile::tempdir().unwrap();
     copy_fixture(tmp.path());

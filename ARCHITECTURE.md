@@ -42,7 +42,8 @@ sorseal init|record|verify|report|keygen|sign|verify-attestation|onchain-verify
 2. Check project name consistency.
 3. If the seal captured git state, require the sealed commit to be reachable
    from (or equal to) current `HEAD`.
-4. For each sealed artifact: rebuild, compare `wasm_sha256`, then compare
+4. For each sealed artifact: fail if the manifest `build_command` no longer
+   matches the sealed command, rebuild, compare `wasm_sha256`, then compare
    `source_sha256`. A missing manifest entry or build failure is an ERROR.
 5. Render the checks; with `--sarif`, also write a SARIF 2.1.0 report (one
    `result` per check, `SARIF` `artifact` for the provenance) for GitHub code
@@ -55,7 +56,8 @@ sorseal init|record|verify|report|keygen|sign|verify-attestation|onchain-verify
    key (`sorseal.pub`), both lowercase hex, 0600-permissioned.
 2. `sign` builds an **in-toto Statement** (subject = provenance wasm digest,
    predicateType = `https://slsa.dev/provenance/v1`) wrapped in a **DSSE**
-   envelope with an Ed25519 signature over `PAYLOAD_TYPE || payload`.
+   envelope with an Ed25519 signature over the DSSE pre-authentication
+   encoding (`DSSEv1 <len(type)> <type> <len(payload)> <payload>`).
 3. `verify-attestation` recomputes the envelope signature with the public key
    and, when the provenance is supplied, cross-checks the statement subjects
    against its artifact digests.
@@ -78,10 +80,12 @@ sorseal init|record|verify|report|keygen|sign|verify-attestation|onchain-verify
 - **Tree digest**: depth-first walk collecting relative paths; paths sorted
   lexicographically before hashing so the digest is order-independent. Each
   entry is hashed as `relative-path\n<bytes>\n`.
-- **Exclusions**: `.git/`, `target/`, and the provenance file itself (so a seal
-  never hashes its own previous value). The manifest `sorseal.toml` *is*
-  included — it is part of the build configuration and belongs in the source
-  fingerprint.
+- **Exclusions**: `.git/`, `target/`, and sorseal's own generated outputs — the
+  provenance file, the signed attestation, the key files (`sorseal.key`,
+  `sorseal.pub`), and any `.sarif` report (so a seal never hashes its own
+  previous value and `record -> sign -> verify` stays reproducible). The
+  manifest `sorseal.toml` *is* included — it is part of the build configuration
+  and belongs in the source fingerprint.
 
 ## Reproducibility
 

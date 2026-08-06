@@ -76,8 +76,7 @@ pub fn attest(signing_key: &SigningKey, provenance: &Provenance, out_path: &Path
 fn sign_dsse(signing_key: &SigningKey, payload: &[u8]) -> Value {
     let b64 = base64::engine::general_purpose::STANDARD;
     let payload_b64 = b64.encode(payload);
-    // DSSE pre-authentication encoding: "DSSEv1" SP payloadType SP payload
-    let pae = format!("DSSEv1 {DSSE_PAYLOAD_TYPE} {payload_b64}");
+    let pae = dsse_pae(DSSE_PAYLOAD_TYPE, &payload_b64);
     let signature: Signature = signing_key.sign(pae.as_bytes());
     let keyid = encode_hex(&signing_key.verifying_key().to_bytes());
 
@@ -131,11 +130,23 @@ pub fn verify_dsse(envelope: &Value, verifying_key: &VerifyingKey) -> Result<Vec
         .decode(payload_b64)
         .map_err(|e| anyhow!("invalid base64 payload: {e}"))?;
 
-    let pae = format!("DSSEv1 {payload_type} {payload_b64}");
+    let pae = dsse_pae(payload_type, payload_b64);
     verifying_key
         .verify(pae.as_bytes(), &signature)
         .map_err(|_| anyhow!("attestation signature verification failed"))?;
     Ok(payload)
+}
+
+/// DSSE pre-authentication encoding:
+/// `DSSEv1 <len(payloadType)> <payloadType> <len(payload)> <payload>`, where
+/// the lengths are ASCII-decimal byte counts and the payload is base64-encoded.
+/// See https://github.com/secure-systems-lab/dsse/blob/main/protocol.md.
+fn dsse_pae(payload_type: &str, payload_b64: &str) -> String {
+    format!(
+        "DSSEv1 {} {payload_type} {} {payload_b64}",
+        payload_type.len(),
+        payload_b64.len()
+    )
 }
 
 /// Build an in-toto Statement v1 with a SLSA v1.0 provenance predicate from a
@@ -278,6 +289,13 @@ mod tests {
                 built_at: "2026-08-06T00:00:00Z".to_string(),
             }],
         }
+    }
+
+    #[test]
+    fn dsse_pae_is_spec_compliant() {
+        // DSSE protocol: "DSSEv1" SP len(type) SP type SP len(payload) SP payload
+        let pae = dsse_pae("application/vnd.in-toto+json", "YWJj");
+        assert_eq!(pae, "DSSEv1 28 application/vnd.in-toto+json 4 YWJj");
     }
 
     #[test]

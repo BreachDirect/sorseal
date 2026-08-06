@@ -29,7 +29,11 @@ We aim to acknowledge reports within **48 hours** and to triage them within
 sorseal is designed to be trustworthy even when the projects it inspects are
 hostile:
 
-- It is **offline** — no network access at runtime, so it cannot exfiltrate data.
+- The core path is **offline** — hashing, sealing, and verification make no
+  network requests, so they cannot exfiltrate data. The sole networked command
+  is `onchain-verify`, which talks only to the Soroban RPC endpoint you pass it
+  (default: Stellar's public RPC) and sends nothing but the query key for the
+  contract it is asked to inspect.
 - It spawns subprocesses only for the user's own `build_command` (run as the
   invoking user, same privileges as a normal `cargo build`) and read-only `git`
   queries.

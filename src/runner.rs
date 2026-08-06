@@ -229,6 +229,21 @@ pub fn verify(
             continue;
         };
 
+        // The seal is only truthful if the build still uses the command that
+        // produced it. A changed build_command would make the record describe
+        // a different build, even when the bytecode happens to be identical.
+        if ma.build_command != art.command {
+            checks.push(Check {
+                artifact: art.id.clone(),
+                check: "command".into(),
+                outcome: Outcome::Fail,
+                detail: format!(
+                    "manifest build_command '{}' no longer matches sealed command '{}'; re-run `sorseal record` to re-seal",
+                    ma.build_command, art.command
+                ),
+            });
+        }
+
         if let Err(e) = run_build(base, &ma.build_command) {
             checks.push(Check {
                 artifact: art.id.clone(),
