@@ -62,7 +62,7 @@ pub fn render_sealed(project: &str, p: &Provenance) -> String {
 /// Markdown report for the Wave deliverable / audit trail.
 pub fn render_markdown(p: &Provenance) -> String {
     let mut out = String::new();
-    out.push_str(&format!("# Provenance: {}\n\n", p.project));
+    out.push_str(&format!("# Provenance: {}\n\n", md_escape(&p.project)));
     out.push_str(&format!("- toolchain: `{}`\n", p.toolchain));
     if p.git.present {
         out.push_str(&format!(
@@ -77,8 +77,16 @@ pub fn render_markdown(p: &Provenance) -> String {
     for a in &p.artifacts {
         out.push_str(&format!(
             "| {} | `{}` | {} | `{}` |\n",
-            a.id, a.wasm_sha256, a.wasm_size, a.source_sha256
+            md_escape(&a.id),
+            a.wasm_sha256,
+            a.wasm_size,
+            a.source_sha256
         ));
     }
     out
+}
+
+/// Escape a user-controlled string for use inside a markdown table cell.
+fn md_escape(s: &str) -> String {
+    s.replace('|', "\\|")
 }

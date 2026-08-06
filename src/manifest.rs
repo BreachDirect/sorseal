@@ -1,15 +1,11 @@
 //! `sorseal.toml` — declares which artifacts to build, hash, and seal.
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 pub const MANIFEST_FILENAME: &str = "sorseal.toml";
-
-fn default_toolchain() -> String {
-    "stable".to_string()
-}
 
 fn default_source_root() -> PathBuf {
     PathBuf::from(".")
@@ -18,8 +14,6 @@ fn default_source_root() -> PathBuf {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
     pub name: String,
-    #[serde(default = "default_toolchain")]
-    pub toolchain: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,7 +36,7 @@ impl Manifest {
     /// Load and validate a manifest from disk.
     pub fn load(path: &Path) -> Result<Manifest> {
         let contents = fs::read_to_string(path)
-            .map_err(|_| anyhow!("manifest not found: {}", path.display()))?;
+            .with_context(|| format!("failed to read {}", path.display()))?;
         let manifest: Manifest =
             toml::from_str(&contents).map_err(|e| anyhow!("invalid {}: {e}", path.display()))?;
         manifest.validate()?;
@@ -63,13 +57,32 @@ impl Manifest {
             if a.build_command.trim().is_empty() {
                 bail!("artifact '{}': 'build_command' must not be empty", a.id);
             }
-            if a.wasm_path.as_os_str().is_empty() {
-                bail!("artifact '{}': 'wasm_path' must not be empty", a.id);
-            }
-            if a.source_root.as_os_str().is_empty() {
-                bail!("artifact '{}': 'source_root' must not be empty", a.id);
-            }
+            validate_tree_path(&a.id, "wasm_path", &a.wasm_path)?;
+            validate_tree_path(&a.id, "source_root", &a.source_root)?;
         }
         Ok(())
     }
+}
+
+/// A tree path must be relative and stay inside the project, so the seal
+/// covers files that actually live in the repository.
+fn validate_tree_path(id: &str, field: &str, p: &Path) -> Result<()> {
+    if p.as_os_str().is_empty() {
+        bail!("artifact '{id}': '{field}' must not be empty");
+    }
+    if !p.is_relative() {
+        bail!(
+            "artifact '{id}': '{field}' must be a relative path, got '{}'",
+            p.display()
+        );
+    }
+    for comp in p.components() {
+        if comp == Component::ParentDir {
+            bail!(
+                "artifact '{id}': '{field}' must not contain '..', got '{}'",
+                p.display()
+            );
+        }
+    }
+    Ok(())
 }

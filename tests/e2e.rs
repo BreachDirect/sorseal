@@ -36,11 +36,29 @@ fn copy_dir(src: &Path, dst: &Path) {
 }
 
 fn run(dir: &Path, args: &[&str]) -> Output {
+    // The fixture build inside the test must write to the tempdir's own
+    // target/ — never an inherited CARGO_TARGET_DIR from the host.
     Command::new(bin())
         .args(args)
         .current_dir(dir)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("CARGO_BUILD_TARGET_DIR")
         .output()
         .expect("failed to run sorseal")
+}
+
+fn git(dir: &Path, args: &[&str]) -> Output {
+    Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .expect("failed to run git")
+}
+
+fn git_out(dir: &Path, args: &[&str]) -> String {
+    let out = git(dir, args);
+    assert!(out.status.success(), "git {args:?} failed");
+    String::from_utf8_lossy(&out.stdout).to_string()
 }
 
 fn stdout(output: &Output) -> String {
@@ -125,7 +143,8 @@ fn init_writes_valid_manifest() {
     assert!(rec.status.success(), "init failed:\n{}", stdout(&rec));
     let text = fs::read_to_string(tmp.path().join("sorseal.toml")).unwrap();
     assert!(text.contains("demo"));
-    let _: toml::Value = text.parse().unwrap();
+    let parsed: toml::Table = text.parse().expect("init output must be valid TOML");
+    assert_eq!(parsed["project"]["name"].as_str(), Some("demo"));
 }
 
 #[test]
@@ -147,4 +166,69 @@ fn init_discovers_cdylib_crate_in_workspace() {
     let text = fs::read_to_string(tmp.path().join("sorseal.toml")).unwrap();
     assert!(text.contains("echo"));
     assert!(text.contains("wasm32-unknown-unknown"));
+}
+
+#[test]
+fn init_discovers_cdylib_with_glob_members() {
+    let tmp = tempfile::tempdir().unwrap();
+    let member = tmp.path().join("contracts/echo");
+    fs::create_dir_all(&member).unwrap();
+    copy_dir(&fixture().join("src"), &member.join("src"));
+    fs::copy(fixture().join("Cargo.toml"), member.join("Cargo.toml")).unwrap();
+    fs::write(
+        tmp.path().join("Cargo.toml"),
+        "[workspace]\nmembers = [\"contracts/*\"]\n",
+    )
+    .unwrap();
+
+    let rec = run(tmp.path(), &["init"]);
+    assert!(rec.status.success(), "init failed:\n{}", stdout(&rec));
+    let text = fs::read_to_string(tmp.path().join("sorseal.toml")).unwrap();
+    assert!(text.contains("echo"));
+}
+
+#[test]
+fn git_flow_record_verify_and_dirty_refusal() {
+    let tmp = tempfile::tempdir().unwrap();
+    copy_fixture(tmp.path());
+    fs::write(tmp.path().join(".gitignore"), "target/\n").unwrap();
+
+    git(tmp.path(), &["init", "-q"]);
+    git(tmp.path(), &["config", "user.email", "test@example.com"]);
+    git(tmp.path(), &["config", "user.name", "Sorseal Test"]);
+    git(tmp.path(), &["add", "."]);
+    git(tmp.path(), &["commit", "-q", "-m", "initial"]);
+    let sealed_commit = git_out(tmp.path(), &["rev-parse", "HEAD"])
+        .trim()
+        .to_string();
+
+    // A dirty working tree must be refused without --allow-dirty.
+    let mut src = fs::read_to_string(tmp.path().join("src/lib.rs")).unwrap();
+    src.push_str("\n// uncommitted\n");
+    fs::write(tmp.path().join("src/lib.rs"), src).unwrap();
+    let rec = run(tmp.path(), &["record"]);
+    assert_eq!(rec.status.code(), Some(2), "dirty record must be refused");
+    git(tmp.path(), &["checkout", "--", "src/lib.rs"]);
+
+    // Clean record seals the current commit with clean:true.
+    let rec = run(tmp.path(), &["record"]);
+    assert!(rec.status.success(), "record failed:\n{}", stdout(&rec));
+    let prov = provenance(tmp.path());
+    assert_eq!(prov["git"]["present"], true);
+    assert_eq!(prov["git"]["clean"], true);
+    assert_eq!(prov["git"]["commit"].as_str().unwrap(), sealed_commit);
+
+    // Commit the seal: HEAD moves past the sealed commit.
+    git(tmp.path(), &["add", "."]);
+    git(tmp.path(), &["commit", "-q", "-m", "seal provenance"]);
+
+    // Wipe the build output and verify: the sealed commit is reachable from HEAD.
+    fs::remove_dir_all(tmp.path().join("target")).unwrap();
+    let ver = run(tmp.path(), &["verify"]);
+    assert!(
+        ver.status.success(),
+        "verify failed after git seal commit:\n{}",
+        stdout(&ver)
+    );
+    assert!(stdout(&ver).contains("reachable"));
 }

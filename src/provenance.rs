@@ -1,6 +1,6 @@
 //! `sorseal.provenance.json` — the sealed record of what was built and hashed.
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -45,7 +45,7 @@ impl Provenance {
     /// Load and validate a provenance file from disk.
     pub fn load(path: &Path) -> Result<Provenance> {
         let contents = std::fs::read_to_string(path)
-            .map_err(|_| anyhow!("provenance not found: {}", path.display()))?;
+            .with_context(|| format!("failed to read {}", path.display()))?;
         let p: Provenance = serde_json::from_str(&contents)
             .map_err(|e| anyhow!("invalid provenance JSON in {}: {e}", path.display()))?;
         if p.format != FORMAT {

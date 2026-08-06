@@ -64,7 +64,7 @@ fn run_build(base: &Path, command: &str) -> Result<()> {
 /// Refuses to seal a dirty working tree unless `allow_dirty` is set — a record
 /// is only meaningful if it describes the exact committed source.
 pub fn record(manifest: &Manifest, base: &Path, allow_dirty: bool) -> Result<Provenance> {
-    let gs = git::git_state(base);
+    let gs = git::git_state(base)?;
     if gs.present && !gs.clean && !allow_dirty {
         bail!(
             "working tree has uncommitted changes; commit first or pass --allow-dirty \
@@ -165,7 +165,7 @@ pub fn verify(
     // HEAD. Byte-level source equality is enforced separately by the source
     // tree digest.
     if provenance.git.present {
-        let gs = git::git_state(base);
+        let gs = git::git_state(base)?;
         let ok = gs.present && git::contains(base, &provenance.git.commit).unwrap_or(false);
         let detail = if !gs.present {
             format!(
@@ -196,6 +196,25 @@ pub fn verify(
             outcome: if ok { Outcome::Pass } else { Outcome::Fail },
             detail,
         });
+    }
+
+    // Any artifact the manifest declares but the seal does not cover is a gap:
+    // it would be built and released without provenance. Fail rather than
+    // silently verifying only the subset that was recorded.
+    let sealed_ids: std::collections::HashSet<&str> =
+        provenance.artifacts.iter().map(|a| a.id.as_str()).collect();
+    for ma in &manifest.artifacts {
+        if !sealed_ids.contains(ma.id.as_str()) {
+            checks.push(Check {
+                artifact: ma.id.clone(),
+                check: "sealed".into(),
+                outcome: Outcome::Error,
+                detail: format!(
+                    "manifest artifact '{}' has no entry in the sealed provenance; run `sorseal record` to seal it",
+                    ma.id
+                ),
+            });
+        }
     }
 
     for art in &provenance.artifacts {
