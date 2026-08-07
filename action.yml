@@ -36,6 +36,13 @@ inputs:
       Rust toolchain to use for the standalone build. Defaults to stable.
     required: false
     default: 'stable'
+  wasm-target:
+    description: >-
+      Rust WASM target(s) the project builds to (space-separated). Modern
+      Soroban (soroban-sdk >= 21 / protocol >= 22) builds to `wasm32v1-none`;
+      older contracts use `wasm32-unknown-unknown`.
+    required: false
+    default: 'wasm32-unknown-unknown'
 
 outputs:
   passed:
@@ -51,9 +58,12 @@ runs:
       with:
         toolchain: ${{ inputs.toolchain }}
 
-    - name: Add wasm32-unknown-unknown target
+    - name: Add WASM target(s)
       shell: bash
-      run: rustup target add wasm32-unknown-unknown
+      run: |
+        for t in ${{ inputs.wasm-target }}; do
+          rustup target add "$t"
+        done
 
     - name: Build sorseal from source
       shell: bash

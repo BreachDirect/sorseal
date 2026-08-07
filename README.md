@@ -130,6 +130,10 @@ sorseal onchain-audit --contract-id C... [--rpc URL] [--start-ledger L] [--end-l
 `record` refuses to seal a **dirty working tree** unless `--allow-dirty` is
 passed — a seal is only meaningful if it describes exactly the committed source.
 
+`init` picks the WASM target per crate: crates that depend on `soroban-sdk`
+(modern Soroban, protocol >= 22) scaffold a `wasm32v1-none` build, everything
+else keeps the legacy `wasm32-unknown-unknown` target.
+
 `report --format markdown` emits a table suitable for a release deliverable or
 audit appendix.
 
@@ -155,8 +159,10 @@ sorseal verify-attestation --public-key release.pub
 Attestations are written as [DSSE envelopes](https://github.com/secure-systems-lab/dsse)
 wrapping an [in-toto Statement](https://github.com/in-toto/attestation) with an
 SLSA v1.0 predicate, so they are interoperable with standard supply-chain
-tooling. `verify-attestation` exits non-zero on a bad signature or — when the
-provenance is given — on any subject mismatch.
+tooling. `verify-attestation` exits non-zero on a bad signature or — when a
+provenance file is present (defaults to `sorseal.provenance.json`) — on any
+subject mismatch; pass `--provenance` to point at another file, or a missing
+file skips the cross-check.
 
 ## On-chain verification
 
@@ -235,7 +241,6 @@ How it works:
 The scan window can be narrowed with `--start-ledger` / `--end-ledger`
 (automatically clamped to what the node retains), which is useful for auditing
 a known deployment window.
-
 ## End-to-end demo
 
 `examples/demo-contract` is a real (soroban-sdk) contract whose only change
@@ -246,7 +251,7 @@ whole story against testnet:
 ```bash
 rustup target add wasm32v1-none
 cargo install soroban-cli --version 27.1.0 --locked   # provides the `stellar` CLI
-cargo build --release                                  # build the sorseal binary
+cargo build --release --locked                         # build the sorseal binary
 scripts/demo.sh                                        # seal -> deploy -> 2 upgrades -> audit
 ```
 
@@ -277,7 +282,9 @@ its release pipeline on provenance in one step:
     sarif-file: sorseal.sarif
 ```
 
-- Inputs: `working-directory`, `manifest`, `provenance`, `sarif-file`, `toolchain`.
+- Inputs: `working-directory`, `manifest`, `provenance`, `sarif-file`, `toolchain`,
+  `wasm-target`. Set `wasm-target` to the target your contract builds to (e.g.
+  `wasm32v1-none` for modern Soroban; the default is `wasm32-unknown-unknown`).
 - Outputs: `passed` (`true`/`false`).
 - When `sarif-file` is set, the results are uploaded to **GitHub code scanning**
   via `github/codeql-action/upload-sarif@v3`, so non-reproducible builds surface

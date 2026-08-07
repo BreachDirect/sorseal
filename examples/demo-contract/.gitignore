@@ -1,6 +1,7 @@
 # Soroban demo contract (examples/demo-contract)
+# Note: Cargo.lock is intentionally committed — a sealed build must be
+# reproducible, which requires a locked dependency graph.
 target/
-Cargo.lock
 sorseal.provenance.json
 sorseal.key
 sorseal.pub

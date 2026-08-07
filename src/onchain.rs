@@ -125,11 +125,24 @@ pub(crate) fn expect_tag(cur: &mut Cursor<'_>, expected: u32, what: &str) -> Res
     Ok(())
 }
 
+/// A shared agent with an overall request timeout, so a stalled or silent RPC
+/// endpoint cannot hang the CLI indefinitely.
+fn rpc_agent() -> &'static ureq::Agent {
+    static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
+    AGENT.get_or_init(|| {
+        ureq::Agent::config_builder()
+            .timeout_global(Some(std::time::Duration::from_secs(60)))
+            .build()
+            .new_agent()
+    })
+}
+
 /// POST a JSON-RPC 2.0 request to a Soroban RPC endpoint and return the
 /// response object (an error response still yields its `error` object for the
 /// caller to interpret; transport failures propagate).
 pub(crate) fn rpc_post(rpc_url: &str, body: &Value) -> Result<Value> {
-    let resp = ureq::post(rpc_url)
+    let resp = rpc_agent()
+        .post(rpc_url)
         .content_type("application/json")
         .send_json(body)
         .with_context(|| format!("RPC request to {rpc_url} failed"))?;

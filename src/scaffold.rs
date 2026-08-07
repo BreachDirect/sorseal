@@ -13,6 +13,7 @@ struct Package {
     name: String,
     lib_name: String,
     is_cdylib: bool,
+    is_soroban: bool,
 }
 
 fn parse_package(dir: &Path, value: &Table) -> Option<Package> {
@@ -36,11 +37,18 @@ fn parse_package(dir: &Path, value: &Table) -> Option<Package> {
         })
         .unwrap_or_default();
     let is_cdylib = crate_types.iter().any(|t| t == "cdylib");
+    // A soroban-sdk dependency means a modern Soroban contract: protocol >= 22
+    // builds to wasm32v1-none, not the legacy wasm32-unknown-unknown target.
+    let is_soroban = value
+        .get("dependencies")
+        .and_then(|d| d.get("soroban-sdk"))
+        .is_some();
     Some(Package {
         dir: dir.to_path_buf(),
         name,
         lib_name,
         is_cdylib,
+        is_soroban,
     })
 }
 
@@ -210,21 +218,22 @@ pub fn scaffold_manifest(
     let artifacts: Vec<Artifact> = packages
         .iter()
         .filter(|p| p.is_cdylib)
-        .map(|p| Artifact {
-            id: p.name.clone(),
-            build_command: format!(
-                "cargo build --release --target wasm32-unknown-unknown -p {}",
-                p.name
-            ),
-            wasm_path: PathBuf::from(format!(
-                "target/wasm32-unknown-unknown/release/{}.wasm",
-                p.lib_name
-            )),
-            source_root: if p.dir == dir {
-                PathBuf::from(".")
+        .map(|p| {
+            let target = if p.is_soroban {
+                "wasm32v1-none"
             } else {
-                p.dir.clone()
-            },
+                "wasm32-unknown-unknown"
+            };
+            Artifact {
+                id: p.name.clone(),
+                build_command: format!("cargo build --release --target {target} -p {}", p.name),
+                wasm_path: PathBuf::from(format!("target/{target}/release/{}.wasm", p.lib_name)),
+                source_root: if p.dir == dir {
+                    PathBuf::from(".")
+                } else {
+                    p.dir.clone()
+                },
+            }
         })
         .collect();
 
@@ -297,5 +306,47 @@ mod tests {
             dirs,
             vec![tmp.path().join("src"), tmp.path().join("contracts/echo")]
         );
+    }
+
+    #[test]
+    fn soroban_crates_scaffold_wasm32v1_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let member = tmp.path().join("contracts/escrow");
+        fs::create_dir_all(&member).unwrap();
+        fs::write(
+            member.join("Cargo.toml"),
+            "[package]\nname = \"escrow\"\nversion = \"0.1.0\"\n\n[lib]\ncrate-type = [\"cdylib\"]\n\n[dependencies]\nsoroban-sdk = \"27.0.5\"\n",
+        )
+        .unwrap();
+        fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"contracts/escrow\"]\n",
+        )
+        .unwrap();
+
+        let m = scaffold_manifest(tmp.path(), None, false).unwrap();
+        assert_eq!(m.artifacts.len(), 1);
+        assert!(m.artifacts[0].build_command.contains("wasm32v1-none"));
+        assert!(m.artifacts[0]
+            .wasm_path
+            .to_string_lossy()
+            .contains("wasm32v1-none"));
+
+        // Non-soroban crates keep the legacy target.
+        let plain = tmp.path().join("plain");
+        fs::create_dir_all(&plain).unwrap();
+        fs::write(
+            plain.join("Cargo.toml"),
+            "[package]\nname = \"plain\"\nversion = \"0.1.0\"\n\n[lib]\ncrate-type = [\"cdylib\"]\n",
+        )
+        .unwrap();
+        fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"contracts/escrow\", \"plain\"]\n",
+        )
+        .unwrap();
+        let m = scaffold_manifest(tmp.path(), None, true).unwrap();
+        let plain_art = m.artifacts.iter().find(|a| a.id == "plain").unwrap();
+        assert!(plain_art.build_command.contains("wasm32-unknown-unknown"));
     }
 }

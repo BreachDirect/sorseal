@@ -1,5 +1,6 @@
 //! sorseal CLI — `sorseal init|record|verify|report`.
 
+use anyhow::bail;
 use clap::{Parser, Subcommand, ValueEnum};
 use sorseal::manifest::Manifest;
 use sorseal::provenance::{Provenance, PROVENANCE_FILENAME};
@@ -91,7 +92,8 @@ enum Command {
         /// Signed attestation file
         #[arg(long, default_value = ATTESTATION_FILENAME)]
         attestation: String,
-        /// Provenance file (optional; when given, subjects are cross-checked)
+        /// Provenance file to cross-check subjects against (defaults to
+        /// sorseal.provenance.json; the check is skipped when it is absent)
         #[arg(long, default_value = PROVENANCE_FILENAME)]
         provenance: String,
     },
@@ -269,14 +271,27 @@ fn run(cli: Cli) -> anyhow::Result<u8> {
 
             let mut ok = true;
             println!("signature verified against {}", public_key);
-            let prov = Provenance::load(&cwd.join(&provenance))?;
-            match sign::subjects_match(&statement, &prov) {
-                Ok(true) => println!("attestation subjects match {}", provenance),
-                Ok(false) => {
-                    println!("WARNING: attestation subjects do NOT match {provenance}");
-                    ok = false;
+            let prov_path = cwd.join(&provenance);
+            if prov_path.exists() {
+                let prov = Provenance::load(&prov_path)?;
+                match sign::subjects_match(&statement, &prov) {
+                    Ok(true) => {
+                        println!("attestation subjects match {}", prov_path.display())
+                    }
+                    Ok(false) => {
+                        println!(
+                            "WARNING: attestation subjects do NOT match {}",
+                            prov_path.display()
+                        );
+                        ok = false;
+                    }
+                    Err(e) => return Err(e),
                 }
-                Err(e) => return Err(e),
+            } else {
+                println!(
+                    "no provenance file at {} — skipping subject cross-check",
+                    prov_path.display()
+                );
             }
             Ok(if ok { 0 } else { 1 })
         }
@@ -332,6 +347,12 @@ fn run(cli: Cli) -> anyhow::Result<u8> {
             };
             let end = end_ledger.unwrap_or(latest);
             let end = end.min(latest);
+            if start > end {
+                bail!(
+                    "--start-ledger {start} is after the effective end ledger {end} \
+                     (--end-ledger {end_ledger:?} / RPC latest {latest})"
+                );
+            }
 
             println!(
                 "auditing contract {contract_hex} against {rpc_url} (ledgers {start}..{end}) ..."

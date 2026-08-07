@@ -50,9 +50,13 @@ impl Manifest {
         if self.artifacts.is_empty() {
             bail!("manifest: at least one [[artifacts]] entry is required");
         }
+        let mut seen = std::collections::HashSet::new();
         for a in &self.artifacts {
             if a.id.trim().is_empty() {
                 bail!("artifact: 'id' must not be empty");
+            }
+            if !seen.insert(a.id.as_str()) {
+                bail!("manifest: duplicate artifact id '{}'", a.id);
             }
             if a.build_command.trim().is_empty() {
                 bail!("artifact '{}': 'build_command' must not be empty", a.id);

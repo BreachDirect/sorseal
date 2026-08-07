@@ -10,7 +10,7 @@
 # soroban-cli), plus the wasm32 target:
 #   rustup target add wasm32v1-none
 #   cargo install soroban-cli --version 27.1.0 --locked   # provides the `stellar` CLI
-#   cargo build --release
+#   cargo build --release --locked
 #
 # Env:
 #   SORSEAL_BIN   path to the sorseal binary        (default: sorseal)
@@ -41,7 +41,9 @@ cd "$CONTRACT_DIR"
 mkdir -p target
 LIB_SRC="$CONTRACT_DIR/src/lib.rs"
 cp "$LIB_SRC" /tmp/demo-lib.rs.orig
-trap 'cp /tmp/demo-lib.rs.orig "$LIB_SRC"' EXIT
+# Restore the committed source and drop the (gitignored) seal produced by the
+# run so the tree is left exactly as it was found.
+trap 'cp /tmp/demo-lib.rs.orig "$LIB_SRC"; rm -f "$CONTRACT_DIR/sorseal.provenance.json"' EXIT
 
 log "Generating a testnet keypair to sign deploys"
 if [ -n "${SOURCE_KEY:-}" ]; then
@@ -54,7 +56,7 @@ else
 fi
 
 log "Stage 1 — build + seal v1 (value = 1_000)"
-cargo build --release --target wasm32v1-none
+cargo build --locked --release --target wasm32v1-none
 "$SORSEAL_BIN" record
 
 log "Stage 2 — deploy v1"
@@ -70,13 +72,13 @@ log "Stage 3 — prove v1 is sealed on-chain"
 
 log "Stage 4 — upgrade to v2 (value = 2_000), deployed WITHOUT a seal"
 sed -i 's/        1_000/        2_000/' "$CONTRACT_DIR/src/lib.rs"
-cargo build --release --target wasm32v1-none
+cargo build --locked --release --target wasm32v1-none
 WASM_HASH="$("$STELLAR_BIN" contract upload --wasm "$WASM" --source-account "$KEY" --rpc-url "$RPC_URL" --network-passphrase "$NETWORK_PASSPHRASE" | tail -1)"
 "$STELLAR_BIN" contract invoke --id "$CONTRACT_ID" --source-account "$KEY" --rpc-url "$RPC_URL" --network-passphrase "$NETWORK_PASSPHRASE" -- upgrade --new-wasm-hash "$WASM_HASH" >/dev/null
 
 log "Stage 5 — upgrade to v3 (value = 3_000), deployed WITHOUT a seal"
 sed -i 's/        2_000/        3_000/' "$CONTRACT_DIR/src/lib.rs"
-cargo build --release --target wasm32v1-none
+cargo build --locked --release --target wasm32v1-none
 WASM_HASH="$("$STELLAR_BIN" contract upload --wasm "$WASM" --source-account "$KEY" --rpc-url "$RPC_URL" --network-passphrase "$NETWORK_PASSPHRASE" | tail -1)"
 "$STELLAR_BIN" contract invoke --id "$CONTRACT_ID" --source-account "$KEY" --rpc-url "$RPC_URL" --network-passphrase "$NETWORK_PASSPHRASE" -- upgrade --new-wasm-hash "$WASM_HASH" >/dev/null
 

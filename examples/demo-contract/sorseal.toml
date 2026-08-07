@@ -7,6 +7,6 @@ name = "demo-contract"
 
 [[artifacts]]
 id = "demo-contract"
-build_command = "cargo build --release --target wasm32v1-none"
+build_command = "cargo build --locked --release --target wasm32v1-none"
 wasm_path = "target/wasm32v1-none/release/demo_contract.wasm"
 source_root = "."

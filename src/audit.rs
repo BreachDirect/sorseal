@@ -250,8 +250,9 @@ pub fn rpc_ledger_window(rpc_url: &str) -> Result<(u32, u32)> {
 
 /// Scan the RPC for every `executable_update` event in `[start, end]`, page by
 /// page, and return the ones for `contract_hex`. The scan uses the cursor
-/// returned by the node and de-duplicates by event id, so the result is the
-/// complete upgrade history the retention window can still produce.
+/// returned by the node (events arrive in ascending ledger order, so the first
+/// event past `end` terminates it) and de-duplicates by event id, so the result
+/// is exactly the upgrade history in the requested window.
 pub fn scan_upgrade_events(
     rpc_url: &str,
     start: u32,
@@ -268,6 +269,7 @@ pub fn scan_upgrade_events(
         if pages > MAX_PAGES {
             bail!("scan exceeded {MAX_PAGES} pages — is the node's cursor making progress?");
         }
+        let mut past_end = false;
         let params = match &cursor {
             Some(c) => {
                 json!({ "filters": upgrade_event_filter(), "pagination": { "cursor": c, "limit": PAGE_LIMIT } })
@@ -304,9 +306,19 @@ pub fn scan_upgrade_events(
                 continue;
             }
             let ev = decode_upgrade_event(raw)?;
+            // `getEvents` returns events in ascending ledger order, so the
+            // first event past `end` ends the scan: everything after it is
+            // outside the requested window.
+            if ev.ledger > end {
+                past_end = true;
+                break;
+            }
             if ev.contract == contract_hex {
                 events.push(ev);
             }
+        }
+        if past_end {
+            break;
         }
         cursor = result
             .get("cursor")
@@ -318,7 +330,6 @@ pub fn scan_upgrade_events(
     }
 
     events.sort_by_key(|e| e.ledger);
-    let _ = end; // the node's cursor naturally stops at the retention frontier
     Ok(events)
 }
 
