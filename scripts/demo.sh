@@ -55,10 +55,11 @@ cargo build --release --target wasm32v1-none
 "$SORSEAL_BIN" record
 
 log "Stage 2 — deploy v1"
+"$STELLAR_BIN" contract alias remove "$CONTRACT_ALIAS" >/dev/null 2>&1 || true
 "$STELLAR_BIN" contract deploy \
   --wasm "$WASM" --alias "$CONTRACT_ALIAS" --source-account "$KEY" \
   --rpc-url "$RPC_URL" --network-passphrase "$NETWORK_PASSPHRASE"
-CONTRACT_ID="$("$STELLAR_BIN" contract id --alias "$CONTRACT_ALIAS" --rpc-url "$RPC_URL" --network-passphrase "$NETWORK_PASSPHRASE")"
+CONTRACT_ID="$("$STELLAR_BIN" contract alias show "$CONTRACT_ALIAS" --rpc-url "$RPC_URL" --network-passphrase "$NETWORK_PASSPHRASE" | tail -1)"
 log "Contract id: $CONTRACT_ID"
 
 log "Stage 3 — prove v1 is sealed on-chain"
