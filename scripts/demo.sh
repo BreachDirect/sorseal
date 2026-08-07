@@ -39,6 +39,9 @@ command -v "$STELLAR_BIN" >/dev/null || fail "$STELLAR_BIN not found on PATH (ca
 
 cd "$CONTRACT_DIR"
 mkdir -p target
+LIB_SRC="$CONTRACT_DIR/src/lib.rs"
+cp "$LIB_SRC" /tmp/demo-lib.rs.orig
+trap 'cp /tmp/demo-lib.rs.orig "$LIB_SRC"' EXIT
 
 log "Generating a testnet keypair to sign deploys"
 if [ -n "${SOURCE_KEY:-}" ]; then
@@ -68,18 +71,14 @@ log "Stage 3 — prove v1 is sealed on-chain"
 log "Stage 4 — upgrade to v2 (value = 2_000), deployed WITHOUT a seal"
 sed -i 's/        1_000/        2_000/' "$CONTRACT_DIR/src/lib.rs"
 cargo build --release --target wasm32v1-none
-"$STELLAR_BIN" contract upgrade \
-  --wasm "$WASM" --source-account "$KEY" \
-  --rpc-url "$RPC_URL" --network-passphrase "$NETWORK_PASSPHRASE" \
-  --contract-id "$CONTRACT_ID" >/dev/null
+WASM_HASH="$("$STELLAR_BIN" contract upload --wasm "$WASM" --source-account "$KEY" --rpc-url "$RPC_URL" --network-passphrase "$NETWORK_PASSPHRASE" | tail -1)"
+"$STELLAR_BIN" contract invoke --id "$CONTRACT_ID" --source-account "$KEY" --rpc-url "$RPC_URL" --network-passphrase "$NETWORK_PASSPHRASE" -- upgrade --new-wasm-hash "$WASM_HASH" >/dev/null
 
 log "Stage 5 — upgrade to v3 (value = 3_000), deployed WITHOUT a seal"
 sed -i 's/        2_000/        3_000/' "$CONTRACT_DIR/src/lib.rs"
 cargo build --release --target wasm32v1-none
-"$STELLAR_BIN" contract upgrade \
-  --wasm "$WASM" --source-account "$KEY" \
-  --rpc-url "$RPC_URL" --network-passphrase "$NETWORK_PASSPHRASE" \
-  --contract-id "$CONTRACT_ID" >/dev/null
+WASM_HASH="$("$STELLAR_BIN" contract upload --wasm "$WASM" --source-account "$KEY" --rpc-url "$RPC_URL" --network-passphrase "$NETWORK_PASSPHRASE" | tail -1)"
+"$STELLAR_BIN" contract invoke --id "$CONTRACT_ID" --source-account "$KEY" --rpc-url "$RPC_URL" --network-passphrase "$NETWORK_PASSPHRASE" -- upgrade --new-wasm-hash "$WASM_HASH" >/dev/null
 
 log "Stage 6 — audit the lineage: v1 sealed, v2/v3 unsealed, current FAILED"
 set +e
