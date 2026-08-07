@@ -43,6 +43,9 @@ log "Generating a testnet keypair to sign deploys"
 if [ -n "${SOURCE_KEY:-}" ]; then
   "$STELLAR_BIN" keys add "$KEY" --secret-key "$SOURCE_KEY" --network-passphrase "$NETWORK_PASSPHRASE"
 else
+  if "$STELLAR_BIN" keys ls 2>/dev/null | grep -q "$KEY"; then
+    "$STELLAR_BIN" keys rm "$KEY" --force >/dev/null 2>&1 || true
+  fi
   "$STELLAR_BIN" keys generate "$KEY" --fund --rpc-url "$RPC_URL" --network-passphrase "$NETWORK_PASSPHRASE"
 fi
 
