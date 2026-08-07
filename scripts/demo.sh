@@ -29,6 +29,7 @@ NETWORK_PASSPHRASE="${NETWORK_PASSPHRASE:-Test SDF Network ; September 2015}"
 CONTRACT_DIR="$(cd "$(dirname "$0")/.." && pwd)/examples/demo-contract"
 WASM="$CONTRACT_DIR/target/wasm32v1-none/release/demo_contract.wasm"
 KEY="sorseal-demo"
+CONTRACT_ALIAS="sorseal-demo-contract"
 
 log() { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
 fail() { printf '\n\033[1;31m!! %s\033[0m\n' "$*" >&2; exit 1; }
@@ -55,9 +56,9 @@ cargo build --release --target wasm32v1-none
 
 log "Stage 2 — deploy v1"
 "$STELLAR_BIN" contract deploy \
-  --wasm "$WASM" --alias "$KEY" --source-account "$KEY" \
+  --wasm "$WASM" --alias "$CONTRACT_ALIAS" --source-account "$KEY" \
   --rpc-url "$RPC_URL" --network-passphrase "$NETWORK_PASSPHRASE"
-CONTRACT_ID="$("$STELLAR_BIN" contract id --alias "$KEY" --rpc-url "$RPC_URL" --network-passphrase "$NETWORK_PASSPHRASE")"
+CONTRACT_ID="$("$STELLAR_BIN" contract id --alias "$CONTRACT_ALIAS" --rpc-url "$RPC_URL" --network-passphrase "$NETWORK_PASSPHRASE")"
 log "Contract id: $CONTRACT_ID"
 
 log "Stage 3 — prove v1 is sealed on-chain"
