@@ -1,0 +1,12 @@
+# sorseal.toml — declares the demo contract artifact sorseal builds and seals.
+# Used by scripts/demo.sh. The demo intentionally mirrors a real Soroban
+# project's setup: build to wasm32v1-none, seal the resulting wasm.
+
+[project]
+name = "demo-contract"
+
+[[artifacts]]
+id = "demo-contract"
+build_command = "cargo build --release --target wasm32v1-none"
+wasm_path = "target/wasm32v1-none/release/demo_contract.wasm"
+source_root = "."

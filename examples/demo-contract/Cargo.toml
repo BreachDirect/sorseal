@@ -1,0 +1,28 @@
+# A minimal, upgradeable Soroban contract used by the end-to-end demo
+# (scripts/demo.sh). `value()` is bumped between releases so the on-chain
+# upgrade lineage shows distinct wasm hashes.
+
+[package]
+name = "demo-contract"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+soroban-sdk = "27.0.5"
+
+[profile.release]
+opt-level = "z"
+overflow-checks = true
+debug = 0
+strip = true
+debug-assertions = false
+panic = "unwind"
+lto = true
+codegen-units = 1
+
+[features]
+testutils = ["soroban-sdk/testutils"]

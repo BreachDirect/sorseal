@@ -79,8 +79,8 @@ name = "escrow"
 
 [[artifacts]]
 id = "escrow"
-build_command = "cargo build --release --target wasm32-unknown-unknown -p escrow"
-wasm_path = "target/wasm32-unknown-unknown/release/escrow.wasm"
+build_command = "cargo build --release --target wasm32v1-none -p escrow"
+wasm_path = "target/wasm32v1-none/release/escrow.wasm"
 source_root = "."
 ```
 
@@ -235,6 +235,34 @@ How it works:
 The scan window can be narrowed with `--start-ledger` / `--end-ledger`
 (automatically clamped to what the node retains), which is useful for auditing
 a known deployment window.
+
+## End-to-end demo
+
+`examples/demo-contract` is a real (soroban-sdk) contract whose only change
+between "releases" is a constant — each bump produces a distinct wasm, which is
+exactly what the audit needs to show a lineage. `scripts/demo.sh` drives the
+whole story against testnet:
+
+```bash
+rustup target add wasm32v1-none
+cargo install soroban-cli --version 27.1.0 --locked   # provides the `stellar` CLI
+cargo build --release                                  # build the sorseal binary
+scripts/demo.sh                                        # seal -> deploy -> 2 upgrades -> audit
+```
+
+The script:
+
+1. **Seals v1** with `sorseal record`, **deploys** it, and proves it on-chain
+   with `sorseal onchain-verify`.
+2. **Upgrades twice without re-sealing** — the unsealed releases a real team
+   would want to catch.
+3. **Audits**: `sorseal onchain-audit` reconstructs the full lineage and exits
+   `1` because the current deployment (v3) has no sealed provenance.
+4. **Seals v3** and re-audits — the same command now exits `0` with the current
+   deployment sealed, while the earlier unsealed versions are still flagged.
+
+It can be driven with your own testnet key (`SOURCE_KEY=... scripts/demo.sh`)
+or lets the script generate and friendbot-fund one automatically.
 
 ## GitHub Action
 

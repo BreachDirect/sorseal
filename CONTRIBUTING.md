@@ -60,6 +60,11 @@ cargo run -- verify
 cargo run -- report --format markdown
 ```
 
+The end-to-end demo (`scripts/demo.sh`) deploys a real contract to testnet and
+runs `onchain-verify` + `onchain-audit` against it — see the README
+["End-to-end demo"](#end-to-end-demo) section. It needs the `stellar` CLI
+(`cargo install soroban-cli --locked`) but nothing else outside the repo.
+
 ---
 
 ## Development Workflow

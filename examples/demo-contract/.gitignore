@@ -1,0 +1,7 @@
+# Soroban demo contract (examples/demo-contract)
+target/
+Cargo.lock
+sorseal.provenance.json
+sorseal.key
+sorseal.pub
+sorseal.sarif
