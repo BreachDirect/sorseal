@@ -8,7 +8,7 @@ it spawns are the user's `build_command` (via `sh -c`) and read-only `git`
 queries.
 
 ```
-sorseal init|record|verify|report|keygen|sign|verify-attestation|onchain-verify
+sorseal init|record|verify|report|keygen|sign|verify-attestation|onchain-verify|onchain-audit
         │
         ├─ src/main.rs     clap CLI, command dispatch, exit codes
         ├─ src/lib.rs      module root
@@ -20,7 +20,8 @@ sorseal init|record|verify|report|keygen|sign|verify-attestation|onchain-verify
         ├─ src/report.rs   console / JSON / Markdown rendering
         ├─ src/sarif.rs    SARIF 2.1.0 rendering of verify results
         ├─ src/sign.rs     Ed25519 keygen + DSSE/in-toto/SLSA signing & verification
-        ├─ src/onchain.rs  Soroban RPC on-chain wasm hash verification
+        ├─ src/onchain.rs  Soroban RPC on-chain wasm hash verification + shared XDR primitives
+        ├─ src/audit.rs    on-chain upgrade-lineage audit (event paging + provenance cross-check)
         ├─ src/git.rs      read-only git helpers (commit, clean, ancestor)
         └─ src/clock.rs    RFC 3339 UTC formatting (no date-time dependency)
 ```
@@ -73,6 +74,32 @@ sorseal init|record|verify|report|keygen|sign|verify-attestation|onchain-verify
    Contract has none, so that is reported as an error.
 4. Compare the deployed hash to the sealed artifact's `wasm_sha256`; exit `0`
    on match, `1` on mismatch, `2` on any RPC/XDR/config error.
+
+### onchain-audit
+
+1. Normalize the contract id and discover the RPC's ledger retention window by
+   probing an out-of-range `startLedger` and parsing the range out of the
+   `-32600` error.
+2. Page `getEvents` for `system` `executable_update` events using a cursor
+   (RPC rejects `startLedger` + cursor together), deduplicate by event id, and
+   filter to the target contract client-side (`contractIds` in the filter is
+   unreliable across cursor pages).
+3. Decode each event's XDR topics: `topic[1]` is the wasm hash that was live
+   *before* the upgrade, `topic[2]` the one live *after*; adjacent events chain
+   into a lineage whose first `old` is the `<deployment>` hash.
+4. Collapse no-op upgrades (old == new) so each row is a distinct deployed
+   wasm; verify the newest `new` matches the hash read from the contract
+   instance (`chain_consistent`). Clamp any user `--start/--end-ledger` to the
+   retention window.
+5. Cross-check every version's wasm hash against the sealed provenance's
+   `wasm_sha256` digests; emit a warning per unsealed version. Exit `0` when
+   the current deployment is sealed (or only when provenance was supplied),
+   `1` when current is unsealed or the lineage is inconsistent, `2` on usage or
+   RPC errors.
+
+The XDR decoder is hand-rolled like the `onchain-verify` path, sharing the
+`rpc_post`, `Cursor`, and tag primitives in `src/onchain.rs` so no
+`stellar-xdr` dependency is needed.
 
 ## Digest design
 

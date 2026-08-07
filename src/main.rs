@@ -110,6 +110,25 @@ enum Command {
         #[arg(long, default_value = PROVENANCE_FILENAME)]
         provenance: String,
     },
+    /// Audit a contract's full on-chain upgrade history against sealed provenance
+    OnchainAudit {
+        /// Contract id (C... strkey or 64-char hex)
+        #[arg(long)]
+        contract_id: String,
+        /// Soroban RPC endpoint (defaults to the Stellar mainnet RPC)
+        #[arg(long)]
+        rpc: Option<String>,
+        /// First ledger to scan for upgrades (defaults to the RPC retention oldest)
+        #[arg(long)]
+        start_ledger: Option<u32>,
+        /// Last ledger to scan for upgrades (defaults to the RPC latest)
+        #[arg(long)]
+        end_ledger: Option<u32>,
+        /// Provenance file to cross-check versions against (defaults to
+        /// sorseal.provenance.json in the current directory when present)
+        #[arg(long)]
+        provenance: Option<String>,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -275,6 +294,61 @@ fn run(cli: Cli) -> anyhow::Result<u8> {
             let check = onchain::verify_contract(&p, &rpc_url, &contract_id, artifact.as_deref())?;
             println!("{}", onchain::render_check(&check));
             Ok(if check.match_ { 0 } else { 1 })
+        }
+
+        Command::OnchainAudit {
+            contract_id,
+            rpc,
+            start_ledger,
+            end_ledger,
+            provenance,
+        } => {
+            let cwd = std::env::current_dir()?;
+            let rpc_url = rpc.unwrap_or_else(|| onchain::MAINNET_RPC.to_string());
+            let contract_hex = sorseal::onchain::normalize_contract_id(&contract_id)?;
+
+            // Provenance is optional for an audit: without it we still
+            // reconstruct the full lineage, just without the cross-check.
+            let prov_path = cwd.join(provenance.unwrap_or_else(|| PROVENANCE_FILENAME.to_string()));
+            let prov = if prov_path.exists() {
+                Some(sorseal::provenance::Provenance::load(&prov_path)?)
+            } else {
+                println!(
+                    "no provenance file at {} — auditing history only",
+                    prov_path.display()
+                );
+                None
+            };
+
+            let (oldest, latest) = sorseal::audit::rpc_ledger_window(&rpc_url)?;
+            let start = start_ledger.unwrap_or(oldest);
+            let start = if start < oldest {
+                println!(
+                    "WARNING  --start-ledger {start} predates RPC retention (oldest {oldest}); clamping"
+                );
+                oldest
+            } else {
+                start
+            };
+            let end = end_ledger.unwrap_or(latest);
+            let end = end.min(latest);
+
+            println!(
+                "auditing contract {contract_hex} against {rpc_url} (ledgers {start}..{end}) ..."
+            );
+            let events = sorseal::audit::scan_upgrade_events(&rpc_url, start, end, &contract_hex)?;
+            let current = onchain::fetch_deployed_wasm_hash(&rpc_url, &contract_id)?;
+            let report = sorseal::audit::build_audit(
+                &contract_hex,
+                events,
+                current,
+                prov.as_ref(),
+                &rpc_url,
+                (start, end),
+            );
+            println!("{}", sorseal::audit::render_audit(&report));
+            let fail = report.provenance_supplied && !report.current_attested;
+            Ok(if fail { 1 } else { 0 })
         }
     }
 }

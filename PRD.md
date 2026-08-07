@@ -43,6 +43,10 @@ CI-friendly way to prove deployed bytecode matches source.
   alone.
 - **On-chain verification** — prove a deployed contract's ledger WASM hash
   matches the sealed provenance by querying Soroban RPC directly.
+- **On-chain audit** — reconstruct a contract's full upgrade lineage from
+  ledger `executable_update` events and cross-check every deployed version
+  against the sealed provenance (catches unsealed versions and drift over time,
+  not just the current hash).
 
 ## Non-goals
 
@@ -64,6 +68,9 @@ CI-friendly way to prove deployed bytecode matches source.
    or provenance fails verification.
 7. `onchain-verify` fetches and decodes a live contract instance and matches
    the sealed wasm hash (verified against a real testnet deployment in tests).
+8. `onchain-audit` reconstructs the upgrade lineage of a live contract that has
+   been upgraded multiple times, collapses no-op upgrades, and flags an
+   unsealed current deployment with exit 1.
 
 ## Out of scope
 

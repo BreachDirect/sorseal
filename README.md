@@ -122,6 +122,9 @@ sorseal verify-attestation --public-key KEY
                                 Verify an attestation signature (and subjects)
 sorseal onchain-verify --contract-id C...
                                 Compare the deployed on-chain wasm hash to provenance
+sorseal onchain-audit --contract-id C... [--rpc URL] [--start-ledger L] [--end-ledger L] [--provenance FILE]
+                                Reconstruct a contract's upgrade lineage from ledger events
+                                and cross-check each version against sealed provenance
 ```
 
 `record` refuses to seal a **dirty working tree** unless `--allow-dirty` is
@@ -176,6 +179,63 @@ Soroban RPC `getLedgerEntries` method and decodes the embedded
 invoke the contract. Exit codes follow the `verify` convention (0 pass / 1
 mismatch / 2 error).
 
+## On-chain audit
+
+`onchain-audit` goes beyond the current hash: it reconstructs a contract's
+**entire upgrade history** from `executable_update` system events on the
+ledger, and cross-checks every deployed version against the sealed provenance.
+
+```bash
+# Defaults to mainnet; point --rpc at any Soroban RPC node (e.g. testnet)
+sorseal onchain-audit --contract-id C... --rpc https://soroban-testnet.stellar.org
+```
+
+```
+Sorseal — on-chain audit
+
+contract    2b8fdc2b74100c53c4854961c7a9c858a017d12e25ca0e20ad78d548dc262847
+rpc         https://soroban-testnet.stellar.org
+scan window ledgers 3887209..4008168 — 3 upgrade event(s) found
+lineage     consistent
+
+version wasm sha256  live from                live until               attested upgrade tx
+─────── ──────────── ──────────────────────── ──────────────────────── ──────── ────────────
+v0      eb4c26caa846 <deployment>             2026-08-03T19:22:54Z     NONE     —
+v1      920800d410a3 2026-08-03T19:22:54Z     2026-08-03T19:23:54Z     NONE     79e8fe597fa4
+v2*     eb4c26caa846 2026-08-03T19:23:54Z     now                      NONE     d87c846937ef
+
+FAILED   current deployment has NO sealed provenance
+```
+
+How it works:
+
+- **Event scan.** It pages `getEvents` for `system` `executable_update` events
+  (cursor-based, so it never double-counts), deduplicates, and keeps only the
+  events for the target contract. Each event carries the wasm hash that was
+  live *before* and *after* the upgrade, so adjacent events chain together into
+  a version lineage.
+- **Window discovery.** The retention window is discovered by probing an
+  out-of-range `startLedger` and reading the range from the RPC error, so the
+  scan always covers exactly what the node can serve.
+- **Lineage.** A version list runs from `<deployment>` (the hash live before
+  the first upgrade) to the current on-chain hash. No-op upgrades (old == new)
+  are collapsed. If the newest upgrade's `new` hash doesn't match the hash read
+  directly from the contract instance, the lineage is flagged inconsistent — a
+  gap (e.g. an upgrade that fell outside the retention window) you should
+  investigate.
+- **Attestation cross-check.** Each version's wasm hash is matched against the
+  `wasm_sha256` digests in `sorseal.provenance.json` (auto-loaded, or
+  `--provenance`). Versions with a matching sealed artifact are `sealed`;
+  anything else produces a warning.
+- **Exit codes.** `0` if the current deployment is sealed by provenance, `1`
+  if it is not (or the lineage is inconsistent), `2` on usage/RPC errors. With
+  no provenance supplied it audits history only and warns on every unsealed
+  version.
+
+The scan window can be narrowed with `--start-ledger` / `--end-ledger`
+(automatically clamped to what the node retains), which is useful for auditing
+a known deployment window.
+
 ## GitHub Action
 
 A reusable composite action wraps `sorseal verify` so any repository can gate
@@ -204,10 +264,10 @@ its release pipeline on provenance in one step:
 ## Roadmap
 
 Phase 1 (core CLI: init, record, verify, report) and Phase 2 (GitHub Action +
-SARIF, Ed25519/DSSE signed attestations, and on-chain WASM verification) are
-shipped. Planned follow-ups — CI provenance signing from OIDC identities,
-multi-signer rotation, and a verification API — are tracked as issues in this
-repo.
+SARIF, Ed25519/DSSE signed attestations, on-chain WASM verification, and
+on-chain upgrade-lineage audits) are shipped. Planned follow-ups — CI
+provenance signing from OIDC identities, multi-signer rotation, and a
+verification API — are tracked as issues in this repo.
 
 ## Wave alignment
 

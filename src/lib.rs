@@ -5,6 +5,7 @@
 //! any time that a clean rebuild reproduces those exact digests. Works on any
 //! Rust/Soroban project — no dependency on other tools in the Wave toolchain.
 
+pub mod audit;
 pub mod clock;
 pub mod digest;
 pub mod git;

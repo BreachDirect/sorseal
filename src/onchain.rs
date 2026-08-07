@@ -22,6 +22,13 @@ const XDR_TAG_SCV_CONTRACT_INSTANCE: u32 = 19; // SCValType
 const XDR_TAG_EXECUTABLE_WASM: u32 = 0; // ContractExecutableType
 const XDR_TAG_EXECUTABLE_STELLAR_ASSET: u32 = 1; // ContractExecutableType
 
+// SCVal union discriminants (Stellar-contract.x) used by `onchain audit` to
+// decode `executable_update` system-event topics.
+pub(crate) const XDR_TAG_SCV_VEC: u32 = 16;
+pub(crate) const XDR_TAG_SCV_OPTIONAL_PRESENT: u32 = 1;
+pub(crate) const XDR_TAG_SCV_SYMBOL: u32 = 15;
+pub(crate) const XDR_TAG_SCV_BYTES: u32 = 13;
+
 /// Build the 48-byte `LedgerKeyContractData` XDR that addresses a contract's
 /// instance entry: the `SCV_LEDGER_KEY_CONTRACT_INSTANCE` key at the
 /// contract's address in persistent durability.
@@ -73,18 +80,18 @@ fn wasm_hash_from_entry(entry_b64: &str) -> Result<Option<[u8; 32]>> {
     }
 }
 
-struct Cursor<'a> {
+pub(crate) struct Cursor<'a> {
     bytes: &'a [u8],
     pos: usize,
 }
 
 impl<'a> Cursor<'a> {
-    fn new(bytes: &'a [u8]) -> Self {
+    pub(crate) fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, pos: 0 }
     }
 }
 
-fn read_u32(cur: &mut Cursor<'_>, what: &str) -> Result<u32> {
+pub(crate) fn read_u32(cur: &mut Cursor<'_>, what: &str) -> Result<u32> {
     let end = cur
         .pos
         .checked_add(4)
@@ -99,7 +106,7 @@ fn read_u32(cur: &mut Cursor<'_>, what: &str) -> Result<u32> {
     Ok(v)
 }
 
-fn take<'a>(cur: &mut Cursor<'a>, n: usize, what: &str) -> Result<&'a [u8]> {
+pub(crate) fn take<'a>(cur: &mut Cursor<'a>, n: usize, what: &str) -> Result<&'a [u8]> {
     let end = cur
         .pos
         .checked_add(n)
@@ -110,12 +117,25 @@ fn take<'a>(cur: &mut Cursor<'a>, n: usize, what: &str) -> Result<&'a [u8]> {
     Ok(out)
 }
 
-fn expect_tag(cur: &mut Cursor<'_>, expected: u32, what: &str) -> Result<()> {
+pub(crate) fn expect_tag(cur: &mut Cursor<'_>, expected: u32, what: &str) -> Result<()> {
     let got = read_u32(cur, what)?;
     if got != expected {
         bail!("unexpected XDR tag for {what}: expected {expected}, got {got}");
     }
     Ok(())
+}
+
+/// POST a JSON-RPC 2.0 request to a Soroban RPC endpoint and return the
+/// response object (an error response still yields its `error` object for the
+/// caller to interpret; transport failures propagate).
+pub(crate) fn rpc_post(rpc_url: &str, body: &Value) -> Result<Value> {
+    let resp = ureq::post(rpc_url)
+        .content_type("application/json")
+        .send_json(body)
+        .with_context(|| format!("RPC request to {rpc_url} failed"))?;
+    resp.into_body()
+        .read_json()
+        .with_context(|| format!("RPC returned non-JSON from {rpc_url}"))
 }
 
 /// Query the Soroban RPC `getLedgerEntries` method for a contract id and return
@@ -132,15 +152,7 @@ pub fn fetch_deployed_wasm_hash(rpc_url: &str, contract_id: &str) -> Result<Stri
         "params": { "keys": [b64.encode(key)] }
     });
 
-    let resp = ureq::post(rpc_url)
-        .content_type("application/json")
-        .send_json(&body)
-        .with_context(|| format!("RPC request to {rpc_url} failed"))?;
-
-    let parsed: Value = resp
-        .into_body()
-        .read_json()
-        .with_context(|| format!("RPC returned non-JSON from {rpc_url}"))?;
+    let parsed = rpc_post(rpc_url, &body)?;
 
     if let Some(err) = parsed.get("error") {
         let msg = err
