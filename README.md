@@ -241,6 +241,68 @@ How it works:
 The scan window can be narrowed with `--start-ledger` / `--end-ledger`
 (automatically clamped to what the node retains), which is useful for auditing
 a known deployment window.
+
+## Verify it yourself
+
+A reference contract is deployed on Stellar **testnet**, and its sealed
+provenance is committed in `examples/demo-contract/sorseal.provenance.json`.
+Clone the repo, drop into that directory, and check it — the on-chain checks
+need nothing beyond the `sorseal` binary and network access.
+
+```bash
+cd examples/demo-contract
+
+# (a) On-chain: does the deployed bytecode match the sealed provenance?
+sorseal onchain-verify \
+  --contract-id CCHOSAZP7YKQOIA2UCWJA534PT2ZR7P2UU4JK5NRFLWQXJMMSHLLWKM2 \
+  --rpc https://soroban-testnet.stellar.org
+```
+
+```
+PASSED  contract :: wasm hash — deployed bytecode matches sealed provenance
+        deployed sha256 1e87febffa91520200343af826849668dd4a54871869090a215edf4d947252cd
+        sealed   sha256 1e87febffa91520200343af826849668dd4a54871869090a215edf4d947252cd
+```
+
+```bash
+# (b) Audit the full upgrade lineage: is the current deployment sealed?
+sorseal onchain-audit \
+  --contract-id CCHOSAZP7YKQOIA2UCWJA534PT2ZR7P2UU4JK5NRFLWQXJMMSHLLWKM2 \
+  --rpc https://soroban-testnet.stellar.org
+```
+
+```
+PASSED   current deployment is sealed by provenance
+```
+
+You can also view the contract in the Stellar Lab:
+<https://lab.stellar.org/r/testnet/contract/CCHOSAZP7YKQOIA2UCWJA534PT2ZR7P2UU4JK5NRFLWQXJMMSHLLWKM2>
+
+Offline, `sorseal verify` rebuilds the wasm from source and re-checks the git
+commit, wasm, and source-tree digests against the same seal (needs the
+`wasm32v1-none` target; byte-identical rebuilds use the toolchain recorded in
+the provenance — `rustc 1.95.0` here):
+
+```bash
+sorseal verify
+```
+
+```
+Sorseal — demo-contract verify
+
+PASSED  project :: name — manifest project 'demo-contract' matches sealed provenance
+PASSED  git :: commit — sealed commit 64a5a2289fd0 is reachable from HEAD cd1f5824f77e
+PASSED  demo-contract :: wasm — sha256 matches sealed digest 1e87febffa91
+PASSED  demo-contract :: source — source tree matches sealed digest 622261596422
+
+4 checks: 4 passed, 0 failed, 0 errored
+```
+
+The on-chain checks (a/b) are toolchain-independent: they compare the on-chain
+wasm hash directly against the committed seal, so they pass on any machine with
+network access. Stellar periodically resets testnet — if the reference contract
+is ever gone, `scripts/demo.sh` redeploys and reseals a fresh one.
+
 ## End-to-end demo
 
 `examples/demo-contract` is a real (soroban-sdk) contract whose only change
