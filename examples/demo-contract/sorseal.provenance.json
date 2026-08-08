@@ -1,0 +1,23 @@
+{
+  "format": "sorseal-provenance",
+  "version": 1,
+  "project": "demo-contract",
+  "toolchain": "rustc 1.95.0 (59807616e 2026-04-14)",
+  "git": {
+    "present": true,
+    "commit": "64a5a2289fd01cd4e1b0fa3ff39b9af65273a307",
+    "clean": true
+  },
+  "artifacts": [
+    {
+      "id": "demo-contract",
+      "command": "cargo build --locked --release --target wasm32v1-none",
+      "wasm_path": "target/wasm32v1-none/release/demo_contract.wasm",
+      "wasm_sha256": "1e87febffa91520200343af826849668dd4a54871869090a215edf4d947252cd",
+      "wasm_size": 1028,
+      "source_root": ".",
+      "source_sha256": "622261596422a3fbf9e4fa23f3a01d4f2cb0a63918ba31b73476362b0c2ee2f0",
+      "built_at": "2026-08-08T18:35:15Z"
+    }
+  ]
+}
