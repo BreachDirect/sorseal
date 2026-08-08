@@ -41,9 +41,18 @@ cd "$CONTRACT_DIR"
 mkdir -p target
 LIB_SRC="$CONTRACT_DIR/src/lib.rs"
 cp "$LIB_SRC" /tmp/demo-lib.rs.orig
-# Restore the committed source and drop the (gitignored) seal produced by the
-# run so the tree is left exactly as it was found.
-trap 'cp /tmp/demo-lib.rs.orig "$LIB_SRC"; rm -f "$CONTRACT_DIR/sorseal.provenance.json"' EXIT
+# Restore the committed source and the seal produced by this run so the tree is
+# left exactly as it was found. The provenance is committed as a reproducible
+# reference fixture (see README "Verify it yourself"), so restore it from git;
+# fall back to removing it for checkouts that predate the fixture.
+restore_provenance() {
+  if git -C "$CONTRACT_DIR" ls-files --error-unmatch sorseal.provenance.json >/dev/null 2>&1; then
+    git -C "$CONTRACT_DIR" checkout -- sorseal.provenance.json
+  else
+    rm -f "$CONTRACT_DIR/sorseal.provenance.json"
+  fi
+}
+trap 'cp /tmp/demo-lib.rs.orig "$LIB_SRC"; restore_provenance' EXIT
 
 log "Generating a testnet keypair to sign deploys"
 if [ -n "${SOURCE_KEY:-}" ]; then
