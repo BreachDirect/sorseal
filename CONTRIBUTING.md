@@ -9,6 +9,8 @@ from first-time open-source contributors to seasoned Rust engineers.
 ## Table of Contents
 
 - [Code of Conduct](#code-of-conduct)
+- [Contribution Labels](#contribution-labels)
+- [Drips Wave 8 Contributions](#drips-wave-8-contributions)
 - [Getting Started](#getting-started)
 - [Development Workflow](#development-workflow)
 - [Code Style & Standards](#code-style--standards)
@@ -64,6 +66,32 @@ The end-to-end demo (`scripts/demo.sh`) deploys a real contract to testnet and
 runs `onchain-verify` + `onchain-audit` against it — see the README
 ["End-to-end demo"](#end-to-end-demo) section. It needs the `stellar` CLI
 (`cargo install soroban-cli --locked`) but nothing else outside the repo.
+
+---
+
+## Contribution Labels
+
+Issues are tagged by difficulty so you can pick the right entry point:
+
+| Label | Meaning |
+| --- | --- |
+| 🟢 `good-first-issue` | Perfect for newcomers — small, well-scoped, guided |
+| 🟡 `help-wanted` | Ready for contribution, some context needed |
+| 🔵 `beginner-friendly` | Minimal project context needed |
+
+## Drips Wave 8 Contributions
+
+sorseal is a **Stellar Drips Wave 8** project. Contributors who solve
+Wave-listed issues may earn **Wave rewards** in addition to the usual
+open-source cred. When you take an issue:
+
+1. Confirm the issue is linked to the Wave's contribution tracker.
+2. State your interest in the issue thread before starting work.
+3. Reference the issue (and the Wave) in your pull request so contributions can
+   be attributed and rewarded.
+
+See the [Drips Wave contributors docs](https://docs.drips.network/wave/contributors/solving-issues-and-earning-rewards)
+for the current rules on points and rewards.
 
 ---
 
