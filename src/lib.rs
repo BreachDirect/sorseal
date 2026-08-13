@@ -5,6 +5,8 @@
 //! any time that a clean rebuild reproduces those exact digests. Works on any
 //! Rust/Soroban project — no dependency on other tools in the Wave toolchain.
 
+#![forbid(unsafe_code)]
+
 pub mod audit;
 pub mod clock;
 pub mod digest;

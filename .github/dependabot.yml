@@ -15,3 +15,8 @@ updates:
     open-pull-requests-limit: 10
     labels:
       - dependencies
+    ignore:
+      # The `msrv` CI job pins the action to the crate's MSRV (1.85.0); the
+      # version tag IS the tested toolchain, so bumping it would silently stop
+      # testing the MSRV. Keep it out of Dependabot's churn.
+      - dependency-name: "dtolnay/rust-toolchain"

@@ -1,5 +1,7 @@
 //! sorseal CLI — `sorseal init|record|verify|report`.
 
+#![forbid(unsafe_code)]
+
 use anyhow::bail;
 use clap::{Parser, Subcommand, ValueEnum};
 use sorseal::manifest::Manifest;
