@@ -41,7 +41,6 @@ multiple-versions = "deny"
 # committed and CI builds with --locked, so there is no need for wildcards.
 wildcards = "deny"
 skip = [
-    { crate = "base64@0.22.1", reason = "ureq/ureq-proto pin base64 0.22; sorseal uses base64 0.23" },
     { crate = "getrandom@0.2.17", reason = "ring (rustls) requires getrandom 0.2; sorseal uses getrandom 0.4" },
     { crate = "syn@2.0.119", reason = "curve25519-dalek-derive pins syn 2; clap/serde derive use syn 3" },
     { crate = "windows-sys@0.52.0", reason = "ring pins windows-sys 0.52; the rest of the tree uses 0.61" },
