@@ -60,15 +60,22 @@ hostile:
 - It spawns subprocesses only for the user's own `build_command` (run as the
   invoking user, same privileges as a normal `cargo build`) and read-only `git`
   queries.
-- It does **not** use `unsafe`.
+- It does **not** use `unsafe` (enforced with `#![forbid(unsafe_code)]`).
 - The dependency tree is deliberately small (`clap`, `serde`, `serde_json`,
-  `toml`, `sha2`, `anyhow`) and is audited weekly in CI via
-  [`cargo audit`](https://github.com/BreachDirect/sorseal/actions/workflows/security.yml).
+  `toml`, `sha2`, `anyhow`, `base64`, `ed25519-dalek`, `getrandom`,
+  `stellar-strkey`, `ureq`) and is checked in CI on every push, every pull
+  request, and weekly: [`cargo audit`](https://github.com/BreachDirect/sorseal/actions/workflows/security.yml)
+  for RustSec/OSV advisories and [`cargo deny`](https://github.com/embarkstudios/cargo-deny)
+  for advisories, yanked crates, license compliance, and duplicate-version
+  detection (see [`deny.toml`](./deny.toml)).
 
 ## Dependency Disclosures
 
-Any `RUSTSEC-*` advisory affecting the dependency tree is surfaced by the
-Security workflow on `main`, on pull requests, and on a weekly schedule.
+Any `RUSTSEC-*` or OSV advisory affecting the dependency tree is surfaced by
+the Security workflow on `main`, on pull requests, and on a weekly schedule.
+`cargo deny` additionally fails CI when a dependency is yanked from crates.io,
+duplicates a version already in the lockfile, or carries a license outside the
+allowlist in [`deny.toml`](./deny.toml).
 
 ## Maintainer Conflicts of Interest
 

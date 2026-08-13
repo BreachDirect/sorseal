@@ -1,0 +1,56 @@
+# cargo-deny policy for sorseal — supply-chain checks beyond cargo-audit:
+# advisory/OSV vulnerabilities, license compliance, and yanked/duplicate deps.
+# Run locally with `cargo deny check`; enforced in CI by the Security workflow.
+
+# All vulnerability and unsound advisories fail CI by default (no config
+# needed). The fields below tighten the remaining knobs.
+[advisories]
+# Pulled-from-registry crates fail CI rather than silently pinning a broken dep.
+yanked = "deny"
+# Unmaintained advisories fail CI when they hit a direct dependency of sorseal
+# itself (not merely a transitive edge).
+unmaintained = "workspace"
+
+[licenses]
+# The exact license set currently present in the dependency tree, plus MIT and
+# Apache-2.0 (sorseal's own dual-license convention). Anything not listed here
+# fails CI, so a new dependency cannot introduce a copyleft or unknown license
+# without an explicit review and an entry in this list.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "0BSD",
+    "BSD-1-Clause",
+    "BSD-3-Clause",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.8
+
+[bans]
+# Two versions of the same crate in the lockfile are a supply-chain red flag
+# (the old version keeps running and is never audited). Fail on duplicates —
+# except the documented transitive pins below, which are fixed by upstream
+# crates and cannot be resolved at our layer.
+multiple-versions = "deny"
+# Wildcard dependencies make builds non-reproducible; the Cargo.lock is
+# committed and CI builds with --locked, so there is no need for wildcards.
+wildcards = "deny"
+skip = [
+    { crate = "base64@0.22.1", reason = "ureq/ureq-proto pin base64 0.22; sorseal uses base64 0.23" },
+    { crate = "getrandom@0.2.17", reason = "ring (rustls) requires getrandom 0.2; sorseal uses getrandom 0.4" },
+    { crate = "syn@2.0.119", reason = "curve25519-dalek-derive pins syn 2; clap/serde derive use syn 3" },
+    { crate = "windows-sys@0.52.0", reason = "ring pins windows-sys 0.52; the rest of the tree uses 0.61" },
+]
+
+[sources]
+# All dependencies must come from crates.io — a new registry or git source
+# fails CI.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

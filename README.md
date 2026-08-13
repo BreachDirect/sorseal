@@ -84,6 +84,9 @@ project can adopt.
 - ✅ **Signed supply-chain records.** Attestations are signed with Ed25519 as
   in-toto Statements (SLSA v1.0 predicate, DSSE envelope) — a public key is all
   a verifier needs to trust a release.
+- ✅ **Hardened supply chain.** CI gates every push/PR on RustSec + OSV advisory
+  scans (`cargo audit`) *and* `cargo deny` (advisories, yanked crates, license
+  compliance, duplicate-version detection); the crate forbids `unsafe` code.
 - ✅ **On-chain verification.** Reads the deployed contract's WASM hash straight
   off Stellar's ledger (mainnet or testnet) via Soroban RPC and proves it
   matches your sealed provenance. No gateway or dashboard — the only trust point
@@ -393,8 +396,9 @@ sorseal/
 ├── scripts/
 │   └── demo.sh          # seal → deploy → 2 upgrades → audit on testnet
 ├── .github/
-│   ├── workflows/       # CI, security (cargo audit), release
+│   ├── workflows/       # CI, security (cargo audit + cargo deny), release
 │   └── ISSUE_TEMPLATE/  # Bug report + feature request templates
+├── deny.toml            # cargo-deny policy (advisories, licenses, duplicates)
 ├── README.md
 ├── CONTRIBUTING.md
 ├── SECURITY.md
