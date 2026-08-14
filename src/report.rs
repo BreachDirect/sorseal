@@ -90,3 +90,101 @@ pub fn render_markdown(p: &Provenance) -> String {
 fn md_escape(s: &str) -> String {
     s.replace('|', "\\|")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::provenance::{ArtifactProvenance, GitState};
+    use crate::runner::Check;
+
+    fn check(outcome: Outcome, detail: &str) -> Check {
+        Check {
+            artifact: "echo.wasm".into(),
+            check: "wasm_hash".into(),
+            outcome,
+            detail: detail.into(),
+        }
+    }
+
+    fn provenance() -> Provenance {
+        Provenance {
+            format: crate::provenance::FORMAT.to_string(),
+            version: 1,
+            project: "demo|project".into(),
+            toolchain: "rustc 1.95.0".into(),
+            git: GitState {
+                present: true,
+                commit: "a".repeat(40),
+                clean: true,
+            },
+            artifacts: vec![ArtifactProvenance {
+                id: "echo".into(),
+                command: "cargo build".into(),
+                wasm_path: "x.wasm".into(),
+                wasm_sha256: "f".repeat(64),
+                wasm_size: 42,
+                source_root: ".".into(),
+                source_sha256: "e".repeat(64),
+                built_at: "2026-01-01T00:00:00Z".into(),
+            }],
+        }
+    }
+
+    #[test]
+    fn render_verify_summarizes_outcomes() {
+        let checks = vec![
+            check(Outcome::Pass, "match"),
+            check(Outcome::Fail, "mismatch"),
+            check(Outcome::Error, "timeout"),
+        ];
+        let out = render_verify("demo", &checks);
+        assert!(out.starts_with("Sorseal — demo verify"));
+        assert!(out.contains("PASSED  echo.wasm :: wasm_hash — match"));
+        assert!(out.contains("FAILED  echo.wasm :: wasm_hash — mismatch"));
+        assert!(out.contains("ERROR   echo.wasm :: wasm_hash — timeout"));
+        assert!(out.contains("3 checks: 1 passed, 1 failed, 1 errored"));
+    }
+
+    #[test]
+    fn render_verify_zero_checks() {
+        assert!(render_verify("demo", &[]).contains("0 checks: 0 passed, 0 failed, 0 errored"));
+    }
+
+    #[test]
+    fn render_sealed_shows_short_digests_and_git_state() {
+        let out = render_sealed("demo", &provenance());
+        assert!(out.starts_with("Sorseal — demo"));
+        assert!(out.contains("sealed  echo :: wasm  sha256 ffffffffffff (42 bytes)"));
+        assert!(out.contains(&format!("git commit {} (clean)", "a".repeat(12))));
+    }
+
+    #[test]
+    fn render_sealed_notes_missing_git() {
+        let mut p = provenance();
+        p.git.present = false;
+        assert!(render_sealed("demo", &p).contains("not a git repository"));
+    }
+
+    #[test]
+    fn render_markdown_escapes_pipes_in_user_input() {
+        let out = render_markdown(&provenance());
+        assert!(out.starts_with("# Provenance: demo\\|project"));
+        assert!(out.contains("| echo | `"));
+        assert!(out
+            .contains("`ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff` | 42 |"));
+    }
+
+    #[test]
+    fn render_markdown_without_git() {
+        let mut p = provenance();
+        p.git.present = false;
+        assert!(render_markdown(&p).contains("git commit: _not a git repository_"));
+    }
+
+    #[test]
+    fn md_escape_only_escapes_pipes() {
+        assert_eq!(md_escape("a|b"), "a\\|b");
+        assert_eq!(md_escape("plain"), "plain");
+        assert_eq!(md_escape("|||"), "\\|\\|\\|");
+    }
+}
