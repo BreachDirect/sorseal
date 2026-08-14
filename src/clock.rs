@@ -52,4 +52,36 @@ mod tests {
     fn leap_day_is_correct() {
         assert_eq!(utc_rfc3339(1_583_020_800), "2020-03-01T00:00:00Z");
     }
+
+    #[test]
+    fn day_and_time_boundaries() {
+        assert_eq!(utc_rfc3339(86_399), "1970-01-01T23:59:59Z");
+        assert_eq!(utc_rfc3339(86_400), "1970-01-02T00:00:00Z");
+    }
+
+    #[test]
+    fn year_and_century_boundaries() {
+        assert_eq!(utc_rfc3339(946_684_800), "2000-01-01T00:00:00Z");
+        assert_eq!(utc_rfc3339(978_307_200), "2001-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn leap_year_rules() {
+        // 2000-02-29 exists (divisible by 400), 2100-03-01 is the day after
+        // 2100-02-28 (not divisible by 400, so no leap day).
+        assert_eq!(utc_rfc3339(951_782_400), "2000-02-29T00:00:00Z");
+        assert_eq!(utc_rfc3339(4_107_542_400), "2100-03-01T00:00:00Z");
+    }
+
+    #[test]
+    fn max_u64_does_not_panic_or_saturate() {
+        let out = utc_rfc3339(u64::MAX);
+        assert!(out.ends_with('Z'));
+        assert!(!out.contains("99999"));
+    }
+
+    #[test]
+    fn last_representable_four_digit_year() {
+        assert_eq!(utc_rfc3339(253_402_300_799), "9999-12-31T23:59:59Z");
+    }
 }
