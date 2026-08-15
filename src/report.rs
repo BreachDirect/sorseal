@@ -87,8 +87,17 @@ pub fn render_markdown(p: &Provenance) -> String {
 }
 
 /// Escape a user-controlled string for use inside a markdown table cell.
+///
+/// The following characters are neutralised so that a single cell can never
+/// span multiple lines or inject code spans:
+///
+/// - `|`       → `\|`  (prevents a premature column separator)
+/// - backtick  → `\``  (prevents an unintended code span)
+/// - `\n`/`\r` → `↵`    (prevents a line break that would split the table row)
 fn md_escape(s: &str) -> String {
     s.replace('|', "\\|")
+        .replace('`', "\\`")
+        .replace(['\n', '\r'], "↵")
 }
 
 #[cfg(test)]
@@ -182,9 +191,45 @@ mod tests {
     }
 
     #[test]
-    fn md_escape_only_escapes_pipes() {
+    fn md_escape_escapes_pipes() {
         assert_eq!(md_escape("a|b"), "a\\|b");
         assert_eq!(md_escape("plain"), "plain");
         assert_eq!(md_escape("|||"), "\\|\\|\\|");
+    }
+
+    #[test]
+    fn md_escape_escapes_backticks() {
+        assert_eq!(md_escape("a`b"), "a\\`b");
+        assert_eq!(md_escape("`code`"), "\\`code\\`");
+    }
+
+    #[test]
+    fn md_escape_neutralises_newlines() {
+        assert_eq!(md_escape("a\nb"), "a↵b");
+        assert_eq!(md_escape("a\rb"), "a↵b");
+        assert_eq!(md_escape("a\r\nb"), "a↵↵b");
+    }
+
+    #[test]
+    fn md_escape_handles_combined_threats() {
+        // A project name that would break the table: pipe, newline, backtick
+        let evil = "evil|project\n`rm -rf`";
+        let escaped = md_escape(evil);
+        assert!(!escaped.contains('\n'));
+        assert!(!escaped.contains('\r'));
+        assert_eq!(escaped, "evil\\|project↵\\`rm -rf\\`");
+    }
+
+    #[test]
+    fn render_markdown_newline_project_stays_single_row() {
+        let mut p = provenance();
+        p.project = "evil\nproject".into();
+        let out = render_markdown(&p);
+        // The header line must contain the placeholder, not a raw newline
+        assert!(out.starts_with("# Provenance: evil↵project"));
+        // No line in the output should be just "project" (injected row)
+        for line in out.lines() {
+            assert!(!line.starts_with("project|"));
+        }
     }
 }
