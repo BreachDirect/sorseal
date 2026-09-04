@@ -39,6 +39,25 @@ pub struct Provenance {
     pub toolchain: String,
     pub git: GitState,
     pub artifacts: Vec<ArtifactProvenance>,
+    /// Optional per-artifact static-analysis digests (see `sorseal analyze`).
+    /// Sealing the finding digest here makes an audit tamper-evident: any
+    /// change to a finding alters the hash, so `sorseal verify` can prove the
+    /// audited source was not altered since the analysis was sealed.
+    #[serde(default)]
+    pub analysis: Vec<ArtifactAnalysis>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtifactAnalysis {
+    /// The artifact id this analysis applies to.
+    pub id: String,
+    /// Number of findings and the highest severity, for quick triage.
+    pub findings: u64,
+    pub worst_severity: String,
+    /// SHA-256 of the stable finding serialization.
+    pub digest: String,
+    /// When the analysis was sealed (RFC 3339 UTC).
+    pub analyzed_at: String,
 }
 
 impl Provenance {
@@ -91,6 +110,15 @@ impl Provenance {
                 );
             }
         }
+        for a in &self.analysis {
+            if !is_hex64(&a.digest) {
+                bail!(
+                    "artifact '{}': analysis digest '{}' is not 64 hex chars",
+                    a.id,
+                    a.digest
+                );
+            }
+        }
         Ok(())
     }
 
@@ -132,6 +160,7 @@ mod tests {
                 source_sha256: "e".repeat(64),
                 built_at: "2026-01-01T00:00:00Z".to_string(),
             }],
+            analysis: Vec::new(),
         }
     }
 

@@ -1,0 +1,21 @@
+[package]
+name = "vulnerable-contract"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+soroban-sdk = "27.0.5"
+
+[profile.release]
+opt-level = "z"
+overflow-checks = true
+debug = 0
+strip = true
+debug-assertions = false
+panic = "unwind"
+lto = true
+codegen-units = 1

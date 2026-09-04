@@ -1,0 +1,20 @@
+# sorseal.toml for the intentionally-vulnerable demo contract.
+#
+# This example exists to showcase `sorseal analyze`: the source_root covers
+# only this contract's directory, so analysis reports on THIS contract rather
+# than the surrounding repository. Run from examples/vulnerable-contract:
+#
+#     sorseal analyze
+#
+# The vulnerable contract contains Critical/High/Medium/Low Soroban patterns
+# (missing require_auth, reentrancy, unchecked arithmetic, panic on input) so
+# a fresh run produces findings immediately.
+
+[project]
+name = "vulnerable-contract"
+
+[[artifacts]]
+id = "vulnerable-contract"
+build_command = "cargo build --locked --release --target wasm32v1-none"
+wasm_path = "target/wasm32v1-none/release/vulnerable_contract.wasm"
+source_root = "."

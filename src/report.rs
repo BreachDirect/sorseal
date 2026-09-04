@@ -127,6 +127,7 @@ mod tests {
                 source_sha256: "e".repeat(64),
                 built_at: "2026-01-01T00:00:00Z".into(),
             }],
+            analysis: Vec::new(),
         }
     }
 

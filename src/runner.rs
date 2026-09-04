@@ -124,6 +124,7 @@ pub fn record(manifest: &Manifest, base: &Path, allow_dirty: bool) -> Result<Pro
         toolchain: toolchain(),
         git: gs,
         artifacts,
+        analysis: Vec::new(),
     })
 }
 

@@ -73,6 +73,45 @@ pub fn render_sarif(project: &str, checks: &[Check]) -> String {
     serde_json::to_string_pretty(&sarif).expect("SARIF is serializable")
 }
 
+/// SARIF 2.1.0 rendering of static-analysis findings (`sorseal analyze`) for
+/// GitHub code scanning. Each finding is its own SARIF result with rule + line
+/// + severity-level mapping.
+pub fn render_analysis_sarif(
+    project: &str,
+    findings: &[crate::analyze::Finding],
+    artifacts: &[String],
+) -> String {
+    let rules = crate::analyze::sarif_rules(findings);
+    let results = crate::analyze::sarif_results(findings);
+    let artifact_uris: Vec<serde_json::Value> = artifacts
+        .iter()
+        .map(|id| {
+            serde_json::json!({
+                "location": { "uri": "sorseal.provenance.json" },
+                "description": { "text": format!("Sealed artifact {id}") }
+            })
+        })
+        .collect();
+    let sarif = json!({
+        "$schema": SCHEMA,
+        "version": "2.1.0",
+        "runs": [{
+            "tool": {
+                "driver": {
+                    "name": "sorseal",
+                    "fullName": format!("sorseal — static analysis for Soroban contract source ({project})"),
+                    "informationUri": INFORMATION_URI,
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "rules": rules
+                }
+            },
+            "artifacts": artifact_uris,
+            "results": results
+        }]
+    });
+    serde_json::to_string_pretty(&sarif).expect("SARIF is serializable")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
