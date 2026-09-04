@@ -10,7 +10,7 @@ from first-time open-source contributors to seasoned Rust engineers.
 
 - [Code of Conduct](#code-of-conduct)
 - [Contribution Labels](#contribution-labels)
-- [Drips Wave 8 Contributions](#drips-wave-8-contributions)
+- [Drips Wave 9 Contributions](#drips-wave-9-contributions)
 - [Getting Started](#getting-started)
 - [Development Workflow](#development-workflow)
 - [Code Style & Standards](#code-style--standards)
@@ -79,9 +79,9 @@ Issues are tagged by difficulty so you can pick the right entry point:
 | 🟡 `help-wanted` | Ready for contribution, some context needed |
 | 🔵 `beginner-friendly` | Minimal project context needed |
 
-## Drips Wave 8 Contributions
+## Drips Wave 9 Contributions
 
-sorseal is a **Stellar Drips Wave 8** project. Contributors who solve
+sorseal is a **Stellar Drips Wave 9** project. Contributors who solve
 Wave-listed issues may earn **Wave rewards** in addition to the usual
 open-source cred. When you take an issue:
 
