@@ -7,6 +7,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod analyze;
 pub mod audit;
 pub mod clock;
 pub mod digest;
@@ -19,3 +20,5 @@ pub mod runner;
 pub mod sarif;
 pub mod scaffold;
 pub mod sign;
+pub mod sim;
+pub mod watch;

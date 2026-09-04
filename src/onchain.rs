@@ -45,7 +45,7 @@ fn contract_instance_key(id: &[u8; 32]) -> [u8; 48] {
 /// Decode a base64 `LedgerEntry` returned by `getLedgerEntries` and extract the
 /// deployed wasm hash. Returns `None` when the contract is a built-in Stellar
 /// Asset Contract (no wasm on-chain) and errors on structurally unexpected XDR.
-fn wasm_hash_from_entry(entry_b64: &str) -> Result<Option<[u8; 32]>> {
+pub(crate) fn wasm_hash_from_entry(entry_b64: &str) -> Result<Option<[u8; 32]>> {
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(entry_b64)
         .context("ledger entry is not valid base64")?;
@@ -125,6 +125,15 @@ pub(crate) fn expect_tag(cur: &mut Cursor<'_>, expected: u32, what: &str) -> Res
     Ok(())
 }
 
+/// A transport for a JSON-RPC 2.0 request/response against a Soroban RPC
+/// endpoint. The live CLI uses [`HttpTransport`]; `sorseal simulate-onchain`
+/// uses a mock so the full on-chain pipeline can be exercised offline with zero
+/// funds and in deterministic CI.
+pub trait Transport {
+    /// POST a JSON-RPC 2.0 request and return the response object.
+    fn post(&self, body: &Value) -> Result<Value>;
+}
+
 /// A shared agent with an overall request timeout, so a stalled or silent RPC
 /// endpoint cannot hang the CLI indefinitely.
 fn rpc_agent() -> &'static ureq::Agent {
@@ -137,23 +146,42 @@ fn rpc_agent() -> &'static ureq::Agent {
     })
 }
 
-/// POST a JSON-RPC 2.0 request to a Soroban RPC endpoint and return the
-/// response object (an error response still yields its `error` object for the
-/// caller to interpret; transport failures propagate).
-pub(crate) fn rpc_post(rpc_url: &str, body: &Value) -> Result<Value> {
-    let resp = rpc_agent()
-        .post(rpc_url)
-        .content_type("application/json")
-        .send_json(body)
-        .with_context(|| format!("RPC request to {rpc_url} failed"))?;
-    resp.into_body()
-        .read_json()
-        .with_context(|| format!("RPC returned non-JSON from {rpc_url}"))
+/// Live transport: POST the request to the endpoint's URL.
+pub struct HttpTransport {
+    rpc_url: String,
+}
+
+impl HttpTransport {
+    pub fn new(rpc_url: impl Into<String>) -> Self {
+        Self {
+            rpc_url: rpc_url.into(),
+        }
+    }
+}
+
+impl Transport for HttpTransport {
+    fn post(&self, body: &Value) -> Result<Value> {
+        let resp = rpc_agent()
+            .post(&self.rpc_url)
+            .content_type("application/json")
+            .send_json(body)
+            .with_context(|| format!("RPC request to {} failed", self.rpc_url))?;
+        resp.into_body()
+            .read_json()
+            .with_context(|| format!("RPC returned non-JSON from {}", self.rpc_url))
+    }
+}
+
+/// Transport default for the live CLI commands. Kept as a thin wrapper so the
+/// network-facing code paths accept any `&dyn Transport` while the CLI keeps
+/// calling with a plain endpoint URL.
+pub fn http_transport(rpc_url: &str) -> HttpTransport {
+    HttpTransport::new(rpc_url)
 }
 
 /// Query the Soroban RPC `getLedgerEntries` method for a contract id and return
 /// the deployed wasm hash as lowercase hex.
-pub fn fetch_deployed_wasm_hash(rpc_url: &str, contract_id: &str) -> Result<String> {
+pub fn fetch_deployed_wasm_hash(transport: &dyn Transport, contract_id: &str) -> Result<String> {
     let hex_id = normalize_contract_id(contract_id)?;
     let id: [u8; 32] = hex_to_bytes(&hex_id)?;
     let key = contract_instance_key(&id);
@@ -165,7 +193,7 @@ pub fn fetch_deployed_wasm_hash(rpc_url: &str, contract_id: &str) -> Result<Stri
         "params": { "keys": [b64.encode(key)] }
     });
 
-    let parsed = rpc_post(rpc_url, &body)?;
+    let parsed = transport.post(&body)?;
 
     if let Some(err) = parsed.get("error") {
         let msg = err
@@ -239,8 +267,8 @@ pub struct OnChainCheck {
 /// Compare the deployed on-chain wasm hash against the sealed provenance for
 /// the given artifact id (or the first artifact when none is specified).
 pub fn verify_contract(
+    transport: &dyn Transport,
     provenance: &Provenance,
-    rpc_url: &str,
     contract_id: &str,
     artifact: Option<&str>,
 ) -> Result<OnChainCheck> {
@@ -256,7 +284,7 @@ pub fn verify_contract(
             .ok_or_else(|| anyhow!("provenance has no artifacts to check on-chain"))?,
     };
 
-    let deployed = fetch_deployed_wasm_hash(rpc_url, contract_id)?;
+    let deployed = fetch_deployed_wasm_hash(transport, contract_id)?;
     let sealed = art.wasm_sha256.to_ascii_lowercase();
     let normalized = normalize_contract_id(contract_id)?;
     let match_ = deployed == sealed;

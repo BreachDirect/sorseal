@@ -216,12 +216,12 @@ fn parse_ledger_range(msg: &str) -> Option<(u32, u32)> {
 
 /// Discover the [oldest, latest] ledger window the RPC retains, by probing an
 /// out-of-range `startLedger` and reading the range from the error.
-pub fn rpc_ledger_window(rpc_url: &str) -> Result<(u32, u32)> {
+pub fn rpc_ledger_window(transport: &dyn onchain::Transport) -> Result<(u32, u32)> {
     let body = json!({
         "jsonrpc": "2.0", "id": 1, "method": "getEvents",
         "params": { "startLedger": 1, "filters": upgrade_event_filter(), "pagination": { "limit": 1 } }
     });
-    let resp = onchain::rpc_post(rpc_url, &body)?;
+    let resp = transport.post(&body)?;
     if let Some(err) = resp.get("error") {
         let msg = err
             .get("message")
@@ -254,7 +254,7 @@ pub fn rpc_ledger_window(rpc_url: &str) -> Result<(u32, u32)> {
 /// event past `end` terminates it) and de-duplicates by event id, so the result
 /// is exactly the upgrade history in the requested window.
 pub fn scan_upgrade_events(
-    rpc_url: &str,
+    transport: &dyn onchain::Transport,
     start: u32,
     end: u32,
     contract_hex: &str,
@@ -279,7 +279,7 @@ pub fn scan_upgrade_events(
             }
         };
         let body = json!({ "jsonrpc": "2.0", "id": 1, "method": "getEvents", "params": params });
-        let resp = onchain::rpc_post(rpc_url, &body)?;
+        let resp = transport.post(&body)?;
         if let Some(err) = resp.get("error") {
             let msg = err
                 .get("message")

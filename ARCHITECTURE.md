@@ -8,22 +8,25 @@ it spawns are the user's `build_command` (via `sh -c`) and read-only `git`
 queries.
 
 ```
-sorseal init|record|verify|report|keygen|sign|verify-attestation|onchain-verify|onchain-audit
+sorseal init|record|verify|report|keygen|sign|verify-attestation|onchain-verify|onchain-audit|watch|analyze
         │
-        ├─ src/main.rs     clap CLI, command dispatch, exit codes
-        ├─ src/lib.rs      module root
-        ├─ src/scaffold.rs sorseal.toml generation (cdylib discovery)
-        ├─ src/manifest.rs sorseal.toml types + validation
-        ├─ src/digest.rs   SHA-256 for files and directory trees
+        ├─ src/main.rs       clap CLI, command dispatch, exit codes
+        ├─ src/lib.rs        module root
+        ├─ src/scaffold.rs   sorseal.toml generation (cdylib discovery)
+        ├─ src/manifest.rs   sorseal.toml types + validation
+        ├─ src/digest.rs     SHA-256 for files and directory trees
         ├─ src/provenance.rs  sorseal.provenance.json types + load/save
-        ├─ src/runner.rs   record + verify orchestration
-        ├─ src/report.rs   console / JSON / Markdown rendering
-        ├─ src/sarif.rs    SARIF 2.1.0 rendering of verify results
-        ├─ src/sign.rs     Ed25519 keygen + DSSE/in-toto/SLSA signing & verification
-        ├─ src/onchain.rs  Soroban RPC on-chain wasm hash verification + shared XDR primitives
-        ├─ src/audit.rs    on-chain upgrade-lineage audit (event paging + provenance cross-check)
-        ├─ src/git.rs      read-only git helpers (commit, clean, ancestor)
-        └─ src/clock.rs    RFC 3339 UTC formatting (no date-time dependency)
+        ├─ src/runner.rs     record + verify orchestration
+        ├─ src/report.rs     console / JSON / Markdown rendering
+        ├─ src/sarif.rs      SARIF 2.1.0 rendering of verify/analyze results
+        ├─ src/sign.rs       Ed25519 keygen + DSSE/in-toto/SLSA signing & verification
+        ├─ src/onchain.rs    Soroban RPC on-chain wasm hash verification + shared XDR primitives
+        ├─ src/audit.rs      on-chain upgrade-lineage audit (event paging + provenance cross-check)
+        ├─ src/sim.rs        fund-free simulated ledger (MockTransport) for offline on-chain demo
+        ├─ src/watch.rs      file integrity monitoring (baseline, drift detection, webhooks)
+        ├─ src/analyze.rs    static Soroban/Rust vulnerability analysis (findings, SARIF/Markdown)
+        ├─ src/git.rs        read-only git helpers (commit, clean, ancestor)
+        └─ src/clock.rs      RFC 3339 UTC formatting (no date-time dependency)
 ```
 
 ## Data flow
@@ -100,6 +103,72 @@ sorseal init|record|verify|report|keygen|sign|verify-attestation|onchain-verify|
 The XDR decoder is hand-rolled like the `onchain-verify` path, sharing the
 `rpc_post`, `Cursor`, and tag primitives in `src/onchain.rs` so no
 `stellar-xdr` dependency is needed.
+
+### watch
+
+1. Read `sorseal.watch.toml` (paths, intervals, webhooks).
+2. For each watched path: hash the file with SHA-256.
+3. Compare against baselines stored in `sorseal.watchstate.json`.
+   - No baseline: record as new (PASS).
+   - Baseline matches: unchanged (PASS).
+   - Baseline differs: drift detected (FAIL).
+   - File missing: missing (FAIL).
+4. Render results to console (or SARIF with `--sarif`).
+5. If any FAIL: send alerts to configured webhooks (Discord, Telegram, POST).
+6. Save updated state.
+7. In `--once` mode: exit after one check. In daemon mode: sleep `interval_secs` and repeat.
+
+### analyze
+
+1. Read `sorseal.toml`; select a single artifact (`--artifact`) or use the first.
+2. Walk `source_root` for `.rs` files, skipping `target/`, `.git/`, builds, and
+   `#[cfg(test)]` modules.
+3. Split each file into function bodies; run the pattern rules per line:
+   - **SORSEAL-101 missing-authorization** (Critical): a function mutates
+     storage or moves value (assignments to `set()`/transfer calls) with no
+     prior `require_auth`.
+   - **SORSEAL-102 reentrancy** (High): a function mutates state and then makes
+     an external `invoke_contract`/`call_contract`/token call without an auth
+     guard.
+   - **SORSEAL-103 unchecked-arithmetic** (Medium): raw `+`/`-`/`*` on a likely
+     value quantity (`i128`/`u128`/amount names) instead of `checked_*`.
+   - **SORSEAL-104 panic-on-input** (Low): `panic!`/`unwrap()` on a
+     caller-reachable value path instead of a `Result`.
+   - **SORSEAL-106 missing-reentrancy-guard** (Medium): `invoke_contract` /
+     `call_contract` call without a `non_reentrant` attribute on the same line.
+4. Serialize findings deterministically (sorted by rule → file → line) and hash
+   them into an analysis digest (SHA-256).
+5. Render console findings, per-severity summary and digest to stdout; optionally
+   render Markdown (`--format markdown`) or SARIF 2.1.0 (`--sarif PATH`).
+6. With `--seal`: append an `ArtifactAnalysis` entry (rule count, worst severity,
+   digest, timestamp) to the matching artifact in `sorseal.provenance.json`.
+   `verify` then cross-checks that the analysis digest is stable and that the
+   source under the seal is unchanged.
+
+### simulate-onchain
+
+A fund-free, offline harness. `sorseal simulate-onchain` builds an in-memory
+ledger ([`src/sim.rs`] `MockLedger`) whose upgrade chain is derived from the
+sealed provenance's artifacts, then runs the **same** public on-chain code paths
+against it via `MockTransport` (a `Transport` impl substituted for the live
+`HttpTransport`):
+
+1. `ledger_from_provenance` renders each artifact's `wasm_sha256` as a version
+   in the chain (artifact[0] = initial deployment, each later artifact = one
+   upgrade), encodes a matching `getLedgerEntries` XDR entry and `getEvents`
+   `executable_update` events with byte-compatible XDR encoders.
+2. `verify_contract` (via `MockTransport`) decodes the current deployment and
+   compares it against the current (last) artifact — PASSED when sealed.
+3. `rpc_ledger_window` + `scan_upgrade_events` + `fetch_deployed_wasm_hash` +
+   `build_audit` reconstruct the full lineage and cross-check every version
+   against the provenance — PASSED when the current deployment is attested.
+4. `--deploy-wasm <hash>` overrides the deployed wasm to simulate drift; an
+   unsealed current deployment yields verify FAILED and audit FAILED with a
+   `current ... NONE` finding.
+
+There is no new on-chain logic here — `sim.rs` only substitutes the transport,
+so the exact parsing/lineage/cross-check code that runs against a live node is
+what gets exercised and tested offline.
 
 ## Digest design
 

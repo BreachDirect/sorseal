@@ -4,10 +4,12 @@
 
 use anyhow::bail;
 use clap::{Parser, Subcommand, ValueEnum};
+use sorseal::analyze;
 use sorseal::manifest::Manifest;
 use sorseal::provenance::{Provenance, PROVENANCE_FILENAME};
 use sorseal::sign::ATTESTATION_FILENAME;
-use sorseal::{onchain, report, runner, scaffold, sign};
+use sorseal::{onchain, report, runner, scaffold, sign, watch};
+use std::fs;
 use std::process::ExitCode;
 
 #[derive(Parser)]
@@ -114,6 +116,74 @@ enum Command {
         #[arg(long, default_value = PROVENANCE_FILENAME)]
         provenance: String,
     },
+    /// Fund-free, offline simulation of the on-chain verify + audit story
+    ///
+    /// Drives the same on-chain code paths (getLedgerEntries decode, getEvents
+    /// paging, upgrade-lineage reconstruction, provenance cross-checking)
+    /// against an in-memory ledger derived from your provenance, so the full
+    /// seal -> deploy -> upgrade -> verify -> audit workflow is reproducible
+    /// with zero funds and no network.
+    SimulateOnchain {
+        /// Contract id (C... strkey or 64-char hex) used as the simulated ledger
+        #[arg(
+            long,
+            default_value = "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a"
+        )]
+        contract_id: String,
+        /// How many upgrades the simulated contract has performed (defaults to
+        /// every artifact past the first)
+        #[arg(long)]
+        upgrades: Option<usize>,
+        /// Override the currently-deployed wasm hash (64-char hex) to simulate
+        /// an unsealed/drifted deployment (audit will report FAILED)
+        #[arg(long)]
+        deploy_wasm: Option<String>,
+        /// Provenance file
+        #[arg(long, default_value = PROVENANCE_FILENAME)]
+        provenance: String,
+    },
+    /// Statically analyze a sealed artifact's Rust source for Soroban vuln patterns
+    Analyze {
+        /// Artifact id to analyze (defaults to all)
+        #[arg(long)]
+        artifact: Option<String>,
+        /// Manifest file
+        #[arg(long, default_value = sorseal::manifest::MANIFEST_FILENAME)]
+        manifest: String,
+        /// Provenance file (used with --seal)
+        #[arg(long, default_value = PROVENANCE_FILENAME)]
+        provenance: String,
+        /// Output format
+        #[arg(long, value_enum, default_value = "console")]
+        format: AnalyzeFormat,
+        /// Also write the findings as a SARIF 2.1.0 report to this path
+        #[arg(long)]
+        sarif: Option<String>,
+        /// Seal the analysis finding-digest into the provenance file
+        #[arg(long)]
+        seal: bool,
+        /// Path suffixes to ignore when walking source (repeatable)
+        #[arg(long)]
+        ignore: Vec<String>,
+    },
+    /// Monitor files for integrity drift and alert on changes
+    Watch {
+        /// Run a single check and exit (for cron)
+        #[arg(long)]
+        once: bool,
+        /// Generate a starter sorseal.watch.toml config
+        #[arg(long)]
+        init: bool,
+        /// Config file
+        #[arg(long, default_value = watch::WATCH_CONFIG_FILENAME)]
+        config: String,
+        /// State file
+        #[arg(long, default_value = watch::WATCH_STATE_FILENAME)]
+        state: String,
+        /// Write results as SARIF to this path
+        #[arg(long)]
+        sarif: Option<String>,
+    },
     /// Audit a contract's full on-chain upgrade history against sealed provenance
     OnchainAudit {
         /// Contract id (C... strkey or 64-char hex)
@@ -142,6 +212,12 @@ enum ReportFormat {
     Markdown,
 }
 
+#[derive(Clone, Copy, ValueEnum)]
+enum AnalyzeFormat {
+    Console,
+    Markdown,
+}
+
 fn main() -> ExitCode {
     match run(Cli::parse()) {
         Ok(code) => ExitCode::from(code),
@@ -150,6 +226,12 @@ fn main() -> ExitCode {
             ExitCode::from(2)
         }
     }
+}
+
+/// Combine exit-code priorities: 2 (config/analysis error) beats 1 (findings)
+/// beats 0 (clean).
+fn max_code(a: u8, b: u8) -> u8 {
+    a.max(b)
 }
 
 fn run(cli: Cli) -> anyhow::Result<u8> {
@@ -298,6 +380,62 @@ fn run(cli: Cli) -> anyhow::Result<u8> {
             Ok(if ok { 0 } else { 1 })
         }
 
+        Command::Watch {
+            once,
+            init,
+            config,
+            state,
+            sarif,
+        } => {
+            let cwd = std::env::current_dir()?;
+
+            if init {
+                let config_path = cwd.join(&config);
+                watch::generate_config(&config_path)?;
+                println!("wrote {config}");
+                return Ok(0);
+            }
+
+            let config_path = cwd.join(&config);
+            let watch_config: watch::WatchConfig = if config_path.exists() {
+                let text = fs::read_to_string(&config_path)?;
+                toml::from_str(&text)
+                    .map_err(|e| anyhow::anyhow!("invalid {}: {e}", config_path.display()))?
+            } else {
+                bail!(
+                    "config not found: {} — run `sorseal watch --init` first",
+                    config_path.display()
+                );
+            };
+
+            let state_path = cwd.join(&state);
+
+            if once {
+                let mut state = watch::load_state(&state_path);
+                let checks = watch::check_once(&watch_config, &mut state)?;
+                println!("{}", watch::render_checks(&checks));
+
+                let failed: Vec<_> = checks.iter().filter(|c| !c.passed()).cloned().collect();
+                if !failed.is_empty() {
+                    let _ = watch::send_alerts(&watch_config, &failed);
+                }
+
+                if let Some(path) = sarif {
+                    std::fs::write(cwd.join(&path), watch::render_sarif(&checks))
+                        .map_err(|e| anyhow::anyhow!("failed to write SARIF to {path}: {e}"))?;
+                    println!();
+                    println!("SARIF report written to {path}");
+                }
+
+                watch::save_state(&state, &state_path)?;
+                let all_pass = checks.iter().all(|c| c.passed());
+                return Ok(if all_pass { 0 } else { 1 });
+            }
+
+            watch::run_loop(&watch_config, &state_path)?;
+            Ok(0)
+        }
+
         Command::OnchainVerify {
             contract_id,
             rpc,
@@ -307,10 +445,168 @@ fn run(cli: Cli) -> anyhow::Result<u8> {
             let cwd = std::env::current_dir()?;
             let p = onchain::load_provenance(&cwd, &provenance)?;
             let rpc_url = rpc.unwrap_or_else(|| onchain::MAINNET_RPC.to_string());
+            let transport = onchain::http_transport(&rpc_url);
             println!("checking contract {contract_id} against {rpc_url} ...");
-            let check = onchain::verify_contract(&p, &rpc_url, &contract_id, artifact.as_deref())?;
+            let check =
+                onchain::verify_contract(&transport, &p, &contract_id, artifact.as_deref())?;
             println!("{}", onchain::render_check(&check));
             Ok(if check.match_ { 0 } else { 1 })
+        }
+
+        Command::SimulateOnchain {
+            contract_id,
+            upgrades,
+            deploy_wasm,
+            provenance,
+        } => {
+            let cwd = std::env::current_dir()?;
+            let p = sorseal::provenance::Provenance::load(&cwd.join(&provenance))?;
+
+            let ledger = sorseal::sim::ledger_from_provenance_with_current(
+                &p,
+                &contract_id,
+                upgrades,
+                deploy_wasm.as_deref(),
+            )?;
+            let transport = sorseal::sim::MockTransport::new(ledger);
+            let rpc_url = "mock://local".to_string();
+            let contract_hex = sorseal::onchain::normalize_contract_id(&contract_id)?;
+
+            println!(
+                "simulated on-chain contract {} ({}) — provenance has {} artifact(s)",
+                contract_hex.split_at(12).0,
+                rpc_url,
+                p.artifacts.len()
+            );
+            println!("  ledger is served from the sealed provenance; no network, no funds");
+            println!();
+
+            println!("sorseal onchain-verify (simulated) ...");
+            let current_artifact = p.artifacts.last().map(|a| a.id.clone());
+            let check = onchain::verify_contract(
+                &transport,
+                &p,
+                &contract_id,
+                current_artifact.as_deref(),
+            )?;
+            println!("{}", onchain::render_check(&check));
+            println!();
+
+            println!("sorseal onchain-audit (simulated) ...");
+            let (oldest, latest) = sorseal::audit::rpc_ledger_window(&transport)?;
+            println!(
+                "  retaining ledgers {oldest}..{latest} — performing audit of the full lineage"
+            );
+            let events =
+                sorseal::audit::scan_upgrade_events(&transport, oldest, latest, &contract_hex)?;
+            let current = onchain::fetch_deployed_wasm_hash(&transport, &contract_id)?;
+            let report = sorseal::audit::build_audit(
+                &contract_hex,
+                events,
+                current,
+                Some(&p),
+                &rpc_url,
+                (oldest, latest),
+            );
+            println!("{}", sorseal::audit::render_audit(&report));
+            Ok(0)
+        }
+
+        Command::Analyze {
+            artifact,
+            manifest,
+            provenance,
+            format,
+            sarif,
+            seal,
+            ignore,
+        } => {
+            let cwd = std::env::current_dir()?;
+            let m = Manifest::load(&cwd.join(&manifest))?;
+            let ignore: Vec<&str> = ignore.iter().map(|s| s.as_str()).collect();
+            let mut exit_code = 0;
+            let mut provenance_for_seal = if seal {
+                let prov_path = cwd.join(&provenance);
+                if prov_path.exists() {
+                    Some(Provenance::load(&prov_path)?)
+                } else {
+                    bail!(
+                        "cannot --seal analysis without a provenance file at {} — run `sorseal record` first",
+                        prov_path.display()
+                    );
+                }
+            } else {
+                None
+            };
+            let mut all_findings: Vec<analyze::Finding> = Vec::new();
+            let mut artifact_analyses: Vec<String> = Vec::new();
+
+            for a in &m.artifacts {
+                if let Some(id) = &artifact {
+                    if a.id != *id {
+                        continue;
+                    }
+                }
+                let source_abs = cwd.join(&a.source_root);
+                let analysis = analyze::analyze_tree(&source_abs, &ignore)?;
+                match format {
+                    AnalyzeFormat::Console => {
+                        println!(
+                            "{}",
+                            analyze::render_analysis(&m.project.name, &a.id, &analysis)
+                        );
+                    }
+                    AnalyzeFormat::Markdown => {
+                        print!(
+                            "{}",
+                            analyze::render_markdown(&m.project.name, &a.id, &analysis)
+                        );
+                    }
+                }
+                if let Some(analysis_digest) = provenance_for_seal.as_mut() {
+                    let id = a.id.clone();
+                    let digest = analysis.digest();
+                    let worst = analysis
+                        .worst_severity()
+                        .map(|s| s.as_str().to_string())
+                        .unwrap_or_else(|| "none".to_string());
+                    analysis_digest
+                        .analysis
+                        .push(sorseal::provenance::ArtifactAnalysis {
+                            id,
+                            findings: analysis.findings.len() as u64,
+                            worst_severity: worst,
+                            digest,
+                            analyzed_at: sorseal::clock::now_rfc3339_utc(),
+                        });
+                }
+                if !analysis.ok || !analysis.findings.is_empty() {
+                    exit_code = max_code(exit_code, if !analysis.ok { 2 } else { 1 });
+                }
+                artifact_analyses.push(a.id.clone());
+                all_findings.extend(analysis.findings);
+            }
+
+            if let Some(sarif_path) = sarif {
+                let json = sorseal::sarif::render_analysis_sarif(
+                    &m.project.name,
+                    &all_findings,
+                    &artifact_analyses,
+                );
+                std::fs::write(cwd.join(&sarif_path), json)
+                    .map_err(|e| anyhow::anyhow!("failed to write SARIF to {sarif_path}: {e}"))?;
+                println!();
+                println!("SARIF report written to {sarif_path}");
+            }
+
+            if let Some(p) = provenance_for_seal {
+                let prov_path = cwd.join(&provenance);
+                p.save(&prov_path)?;
+                println!();
+                println!("analysis digests sealed into {provenance}");
+            }
+
+            Ok(exit_code)
         }
 
         Command::OnchainAudit {
@@ -322,6 +618,7 @@ fn run(cli: Cli) -> anyhow::Result<u8> {
         } => {
             let cwd = std::env::current_dir()?;
             let rpc_url = rpc.unwrap_or_else(|| onchain::MAINNET_RPC.to_string());
+            let transport = onchain::http_transport(&rpc_url);
             let contract_hex = sorseal::onchain::normalize_contract_id(&contract_id)?;
 
             // Provenance is optional for an audit: without it we still
@@ -337,7 +634,7 @@ fn run(cli: Cli) -> anyhow::Result<u8> {
                 None
             };
 
-            let (oldest, latest) = sorseal::audit::rpc_ledger_window(&rpc_url)?;
+            let (oldest, latest) = sorseal::audit::rpc_ledger_window(&transport)?;
             let start = start_ledger.unwrap_or(oldest);
             let start = if start < oldest {
                 println!(
@@ -359,8 +656,9 @@ fn run(cli: Cli) -> anyhow::Result<u8> {
             println!(
                 "auditing contract {contract_hex} against {rpc_url} (ledgers {start}..{end}) ..."
             );
-            let events = sorseal::audit::scan_upgrade_events(&rpc_url, start, end, &contract_hex)?;
-            let current = onchain::fetch_deployed_wasm_hash(&rpc_url, &contract_id)?;
+            let events =
+                sorseal::audit::scan_upgrade_events(&transport, start, end, &contract_hex)?;
+            let current = onchain::fetch_deployed_wasm_hash(&transport, &contract_id)?;
             let report = sorseal::audit::build_audit(
                 &contract_hex,
                 events,
