@@ -135,6 +135,12 @@ impl Analysis {
     pub fn count_by_severity(&self, sev: Severity) -> usize {
         self.findings.iter().filter(|f| f.severity == sev).count()
     }
+
+    /// True when at least one finding has severity at or above `threshold`.
+    /// The basis for the `--fail-on` CI gate.
+    pub fn has_findings_at_or_above(&self, threshold: Severity) -> bool {
+        self.findings.iter().any(|f| f.severity >= threshold)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -225,6 +231,15 @@ fn strip_comments_and_strings(line: &str) -> String {
 /// `ignore` is an optional set of path suffixes (e.g. `target/`) to skip so
 /// analysis only judges the project source, never generated build output.
 pub fn analyze_tree(source_root: &Path, ignore: &[&str]) -> Result<Analysis> {
+    analyze_tree_with(source_root, ignore, &AnalyzeOptions::default())
+}
+
+/// `analyze_tree` with explicit options (e.g. inline suppressions disabled).
+pub fn analyze_tree_with(
+    source_root: &Path,
+    ignore: &[&str],
+    opts: &AnalyzeOptions,
+) -> Result<Analysis> {
     let mut analysis = Analysis {
         ok: true,
         findings: Vec::new(),
@@ -237,11 +252,32 @@ pub fn analyze_tree(source_root: &Path, ignore: &[&str]) -> Result<Analysis> {
         ignore,
         &mut analysis,
         &mut walked_any,
+        opts,
     )?;
     // A directory with no Rust files means we either mis-scoped the artifact
     // or there is nothing to audit — surface it rather than reporting a clean
     // but meaningless "no findings".
     analysis.ok = walked_any;
+
+    // Deterministic ordering (file -> line -> rule) so the digest and every
+    // renderer (console, JSON, Markdown, SARIF) are stable regardless of the
+    // filesystem's read_dir order.
+    analysis.findings.sort_by(|a, b| {
+        (
+            a.file.as_str(),
+            a.line,
+            a.rule.as_str(),
+            a.severity,
+            a.message.as_str(),
+        )
+            .cmp(&(
+                b.file.as_str(),
+                b.line,
+                b.rule.as_str(),
+                b.severity,
+                b.message.as_str(),
+            ))
+    });
 
     Ok(analysis)
 }
@@ -252,6 +288,7 @@ fn walk(
     ignore: &[&str],
     analysis: &mut Analysis,
     walked_any: &mut bool,
+    opts: &AnalyzeOptions,
 ) -> Result<()> {
     for entry in std::fs::read_dir(dir)
         .with_context(|| format!("failed to read source root {}", dir.display()))?
@@ -264,10 +301,10 @@ fn walk(
             }
         }
         if path.is_dir() {
-            walk(root, &path, ignore, analysis, walked_any)?;
+            walk(root, &path, ignore, analysis, walked_any, opts)?;
         } else if is_rust_source(&path) {
             *walked_any = true;
-            analyze_file(root, &path, analysis)?;
+            analyze_file(root, &path, analysis, opts)?;
         }
     }
     Ok(())
@@ -277,7 +314,19 @@ fn is_rust_source(path: &Path) -> bool {
     matches!(path.extension().and_then(|e| e.to_str()), Some("rs"))
 }
 
-fn analyze_file(root: &Path, path: &Path, analysis: &mut Analysis) -> Result<()> {
+/// A rule/suppression filter passed through the analyzer. `no_ignore` disables
+/// inline `// sorseal:ignore ...` comments so every finding is visible.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AnalyzeOptions {
+    pub no_ignore: bool,
+}
+
+fn analyze_file(
+    root: &Path,
+    path: &Path,
+    analysis: &mut Analysis,
+    opts: &AnalyzeOptions,
+) -> Result<()> {
     let contents = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read {}", path.display()))?;
     let rel = path
@@ -297,33 +346,102 @@ fn analyze_file(root: &Path, path: &Path, analysis: &mut Analysis) -> Result<()>
     let test_ranges = test_block_ranges(&lines);
     let functions = split_functions(&lines);
 
+    // Findings for this file only — used to apply inline suppressions after
+    // the rules have run.
+    let findings_start = analysis.findings.len();
+
     if functions.is_empty() {
         // No explicit fn blocks (e.g. a pure macro-heavy file): still run the
         // line-local rules across the whole file, but exclude test regions.
-        run_line_rules(&lines, &rel, analysis, None);
-        return Ok(());
+        run_line_rules(&lines, &rel, analysis, None, 0);
+    } else {
+        for fun in &functions {
+            let (start, end) = (fun.0, fun.1);
+            if test_ranges.iter().any(|(s, e)| start >= *s && start < *e) {
+                continue;
+            }
+            run_function_rules(
+                &lines[start..end.min(lines.len())],
+                &rel,
+                start as u32 + 1,
+                analysis,
+            );
+            run_line_rules(
+                &lines[start..end.min(lines.len())],
+                &rel,
+                analysis,
+                Some(&test_ranges),
+                start as u32,
+            );
+        }
     }
 
-    for fun in &functions {
-        let (start, end) = (fun.0, fun.1);
-        if test_ranges.iter().any(|(s, e)| start >= *s && start < *e) {
-            continue;
-        }
-        run_function_rules(
-            &lines[start..end.min(lines.len())],
-            &rel,
-            start as u32 + 1,
-            analysis,
-        );
-        run_line_rules(
-            &lines[start..end.min(lines.len())],
-            &rel,
-            analysis,
-            Some(&test_ranges),
-        );
-    }
+    apply_inline_suppressions(
+        &mut analysis.findings,
+        findings_start,
+        &lines,
+        opts.no_ignore,
+    );
 
     Ok(())
+}
+
+/// Drop findings whose source line is immediately preceded by an inline
+/// `// sorseal:ignore <RULE>` comment (or `// sorseal:ignore all`). The
+/// comment carries a reason after the rule id, e.g.
+/// `// sorseal:ignore SORSEAL-104 reviewed: this path is guarded above`.
+/// Suppressed findings are removed before counts and the digest are computed,
+/// so a suppressed run seals a different digest than an unsuppressed one.
+/// `start` is the index of the first finding belonging to the current file.
+fn apply_inline_suppressions(
+    findings: &mut Vec<Finding>,
+    start: usize,
+    lines: &[&str],
+    no_ignore: bool,
+) {
+    if no_ignore || lines.is_empty() {
+        return;
+    }
+    let current = findings.split_off(start);
+    let mut kept: Vec<Finding> = Vec::with_capacity(current.len());
+    for finding in current {
+        // The finding's 1-based line: the suppressive comment sits on the
+        // line above it (0-based index finding.line - 2).
+        let suppressed = finding.line >= 2
+            && lines
+                .get((finding.line - 2) as usize)
+                .and_then(|line| inline_ignore_rules(line))
+                .is_some_and(|rules| {
+                    rules
+                        .iter()
+                        .any(|r| r == "all" || r == finding.rule.as_str())
+                });
+        if !suppressed {
+            kept.push(finding);
+        }
+    }
+    findings.extend(kept);
+}
+
+/// Parse the rule ids named by a `sorseal:ignore` comment (if any). Returns
+/// `None` when the directive is absent or names no known rule.
+fn inline_ignore_rules(line: &str) -> Option<Vec<String>> {
+    let marker = "sorseal:ignore";
+    let idx = line.find(marker)?;
+    let rest = &line[idx + marker.len()..];
+    let mut rules = Vec::new();
+    for token in rest.split_whitespace() {
+        if token == "all" {
+            rules.push("all".to_string());
+        } else if token.to_ascii_uppercase().starts_with("SORSEAL-") {
+            rules.push(token.to_ascii_uppercase());
+        }
+    }
+    if rules.is_empty() {
+        None
+    } else {
+        Some(rules)
+    }
 }
 
 /// Index ranges (half-open) covering `#[cfg(test)]` module blocks, so rule
@@ -424,9 +542,12 @@ fn run_function_rules(fn_lines: &[&str], rel: &str, fn_start_1based: u32, analys
     let mut has_auth = false;
     let mut mutates_state = false;
     let mut makes_external_call = false;
+    let mut made_transfer = false;
+    let mut reads_balance_or_allowance = false;
 
     for (li, raw) in fn_lines.iter().enumerate() {
         let line = strip_comments_and_strings(raw);
+        let lower = line.to_ascii_lowercase();
         let lineno = fn_start_1based + li as u32;
 
         // Authorization / reentrancy-guard detection.
@@ -446,6 +567,15 @@ fn run_function_rules(fn_lines: &[&str], rel: &str, fn_start_1based: u32, analys
         // External calls: reentrancy-relevant.
         if line.contains("invoke_contract") || line.contains("call_contract") {
             makes_external_call = true;
+        }
+
+        // SORSEAL-105: a value transfer whose amount was not derived from a
+        // balance/allowance read on this contract.
+        if line.contains(".transfer(") || line.contains(".transfer_from(") {
+            made_transfer = true;
+        }
+        if lower.contains("balance") || lower.contains("allowance") {
+            reads_balance_or_allowance = true;
         }
 
         // Rule: panic on user input (availability / poor validation).
@@ -524,21 +654,44 @@ fn run_function_rules(fn_lines: &[&str], rel: &str, fn_start_1based: u32, analys
             remediation: "Apply a `non_reentrant` guard, move the external call after all state updates, or rely on `require_auth` of the target.",
         });
     }
+
+    // Rule: value transfer whose amount was not derived from a balance /
+    // allowance read (SORSEAL-105). Hard-coded or balance-insensitive amounts
+    // are a classic Soroban drain vector.
+    if made_transfer && !reads_balance_or_allowance {
+        analysis.findings.push(Finding {
+            rule: RuleId::UncheckedTransfer,
+            severity: Severity::High,
+            message: "token `.transfer`/`.transfer_from` call with no prior balance/allowance read; the transferred amount is not derived from what this contract actually holds"
+                .to_string(),
+            file: rel.to_string(),
+            line: fn_start_1based,
+            remediation: "Read `env.ledger().balance(...)` (or a stored allowance) first and derive the amount from it, or add a `require_auth`-guarded allowance check before transferring.",
+        });
+    }
 }
 
 /// Run line-local rules (those that do not need function context).
-/// `test_ranges` suppresses findings inside `#[cfg(test)]` modules.
+/// `test_ranges` suppresses findings inside `#[cfg(test)]` modules and is in
+/// file coordinates (0-based line indices).
+/// `base_line` is the 0-based file index of the first line in `lines`, so
+/// reported line numbers are absolute (not relative to a function slice).
 fn run_line_rules(
     lines: &[&str],
     rel: &str,
     analysis: &mut Analysis,
     test_ranges: Option<&[(usize, usize)]>,
+    base_line: u32,
 ) {
     for (i, raw) in lines.iter().enumerate() {
         let line = strip_comments_and_strings(raw);
-        let lineno = i as u32 + 1;
+        let file_index = base_line + i as u32;
+        let lineno = file_index + 1;
         let in_test = test_ranges
-            .map(|r| r.iter().any(|(s, e)| i >= *s && i < *e))
+            .map(|r| {
+                r.iter()
+                    .any(|(s, e)| file_index >= *s as u32 && file_index < *e as u32)
+            })
             .unwrap_or(false);
         if in_test {
             continue;
@@ -643,12 +796,13 @@ pub fn sarif_rules(findings: &[Finding]) -> serde_json::Value {
     let mut rules = Vec::new();
     for f in findings {
         if seen.insert(f.rule.as_str()) {
-            let severity = f.severity;
-            let _ = severity;
+            let meta = rule_meta(f.rule);
             rules.push(serde_json::json!({
-                "id": f.rule.as_str(),
-                "name": f.rule.name(),
-                "shortDescription": { "text": to_short_desc(f.rule) },
+                "id": meta.id,
+                "name": meta.name,
+                "shortDescription": { "text": meta.short_desc },
+                "fullDescription": { "text": meta.description },
+                "help": { "text": meta.fix },
                 "properties": { "tags": ["soroban", "security-audit"] }
             }));
         }
@@ -681,15 +835,213 @@ pub fn sarif_results(findings: &[Finding]) -> serde_json::Value {
     serde_json::Value::Array(results)
 }
 
-fn to_short_desc(rule: RuleId) -> String {
-    match rule {
-        RuleId::MissingAuth => "State or value mutation without require_auth".into(),
-        RuleId::Reentrancy => "Possible reentrancy (external call after state mutation)".into(),
-        RuleId::UncheckedArithmetic => "Unchecked arithmetic on value quantities".into(),
-        RuleId::PanicOnInput => "Panic/unwrap on user-reachable code path".into(),
-        RuleId::UncheckedTransfer => "Value transfer without an apparent balance/auth check".into(),
-        RuleId::MissingReentrancyGuard => "External call without a non_reentrant guard".into(),
+// ---------------------------------------------------------------------------
+// Rule metadata + `--explain`
+// ---------------------------------------------------------------------------
+
+/// Durable documentation for one detection rule. This single table backs
+/// `--explain`, the SARIF rule definitions, and the short descriptions, so
+/// rule guidance lives in one place.
+pub struct RuleMeta {
+    /// Stable id, e.g. `SORSEAL-101`.
+    pub id: &'static str,
+    /// Machine name, e.g. `missing-authorization`.
+    pub name: &'static str,
+    /// The `RuleId` variant this describes.
+    pub rule: RuleId,
+    /// Severity string (`Critical`..`Low`).
+    pub severity: &'static str,
+    /// One-line summary shown in SARIF/terse output.
+    pub short_desc: &'static str,
+    /// Longer prose used by `--explain`.
+    pub description: &'static str,
+    /// Illustrative (or real) snippet context, shown by `--explain`.
+    pub example: &'static str,
+    /// Concrete remediation guidance.
+    pub fix: &'static str,
+}
+
+/// The full, ordered rule set (by id).
+pub fn all_rules() -> Vec<RuleMeta> {
+    vec![
+        RuleMeta {
+            id: "SORSEAL-101",
+            name: "missing-authorization",
+            rule: RuleId::MissingAuth,
+            severity: "Critical",
+            short_desc: "State or value mutation without require_auth",
+            description: "Detects a function that mutates contract state or moves value \
+                          without calling `require_auth` (or `require_auth_for_args`) first. \
+                          An unauthenticated caller can drive the change, so a contract \
+                          holding value here is vulnerable to being drained.",
+            example: "pub fn withdraw(env: Env, to: Address, amount: i128) {\n    \
+                       env.storage().persistent().set(&KEY, &0i128);   // no require_auth\n}",
+            fix: "Call `env.current_contract_address().require_auth()` (or \
+                  `require_auth_for_args`) before any state mutation that affects value.",
+        },
+        RuleMeta {
+            id: "SORSEAL-102",
+            name: "reentrancy",
+            rule: RuleId::Reentrancy,
+            severity: "High",
+            short_desc: "Possible reentrancy (external call after state mutation)",
+            description: "The function mutates contract state and then makes an external \
+                          `invoke_contract`/`call_contract` call without authorization. If \
+                          the external call re-enters this contract before state is \
+                          committed, an attacker can observe or drive inconsistent state.",
+            example: "env.storage().persistent().set(&BALANCE, &new);\nenv.invoke_contract::<i128>(&amount, &Symbol::new(\"apply\"), (&amount,));",
+            fix: "Apply a `non_reentrant` guard, move the external call after all state \
+                  updates, or rely on `require_auth` of the target.",
+        },
+        RuleMeta {
+            id: "SORSEAL-103",
+            name: "unchecked-arithmetic",
+            rule: RuleId::UncheckedArithmetic,
+            severity: "Medium",
+            short_desc: "Unchecked arithmetic on value quantities",
+            description: "Raw `+`/`-`/`*` is applied to a likely value quantity (amount, \
+                          balance, i128) without a `checked_*` helper, so an overflow can \
+                          silently wrap balances.",
+            example: "let new_balance: i128 = balance - amount; // unchecked subtraction",
+            fix: "Use `checked_add`, `checked_sub`, `checked_mul` on I128/amounts and \
+                  handle `None` with a revert.",
+        },
+        RuleMeta {
+            id: "SORSEAL-104",
+            name: "panic-on-user-input",
+            rule: RuleId::PanicOnInput,
+            severity: "Low",
+            short_desc: "Panic/unwrap on user-reachable code path",
+            description: "`panic!` or `unwrap()`/`expect()` on a code path that callers can \
+                          reach, which reverts the whole transaction instead of returning a \
+                          structured error and can hurt cross-contract callers.",
+            example: "let rate: i128 = env.storage().instance().get(&KEY).unwrap();",
+            fix: "Replace panics with `Result` and use `?`/`ensure!` so callers (and the \
+                  front-end) can handle failures gracefully.",
+        },
+        RuleMeta {
+            id: "SORSEAL-105",
+            name: "unchecked-transfer",
+            rule: RuleId::UncheckedTransfer,
+            severity: "High",
+            short_desc: "Value transfer without an apparent balance/auth check",
+            description: "A token `.transfer`/`.transfer_from` call transfers an amount that \
+                          was not derived from a prior `balance`/`allowance` read in the \
+                          same function. Hard-coded or balance-insensitive amounts are a \
+                          classic Soroban drain vector.",
+            example: "pub fn sweep(env: Env, to: Address) {\n    let amount = SOME_CONSTANT;\n    token::Client::new(&env, &to).transfer(&env.current_contract_address(), &to, &amount);\n}",
+            fix: "Read `env.ledger().balance(...)` (or a stored allowance) first and derive \
+                  the amount from it, or add a `require_auth`-guarded allowance check before \
+                  transferring.",
+        },
+        RuleMeta {
+            id: "SORSEAL-106",
+            name: "missing-reentrancy-guard",
+            rule: RuleId::MissingReentrancyGuard,
+            severity: "Medium",
+            short_desc: "External call without a non_reentrant guard",
+            description: "An `invoke_contract`/`call_contract` call appears without an \
+                          adjacent `#[non_reentrant]` guard, so the calling function can be \
+                          re-entered while already executing.",
+            example: "env.invoke_contract::<i128>(&amount, &Symbol::new(\"apply\"), (&amount,));",
+            fix: "Consider guarding the calling function with `#[non_reentrant]` to prevent \
+                  reentrant entry.",
+        },
+    ]
+}
+
+/// Look up durable metadata for a rule (always present — every variant is
+/// covered by `all_rules`).
+pub fn rule_meta(rule: RuleId) -> RuleMeta {
+    all_rules()
+        .into_iter()
+        .find(|m| m.rule == rule)
+        .expect("every RuleId has an entry in the rule table")
+}
+
+/// Try to resolve a rule from its stable id, e.g. `SORSEAL-101`.
+pub fn rule_from_id(id: &str) -> Option<RuleMeta> {
+    all_rules()
+        .into_iter()
+        .find(|m| m.id.eq_ignore_ascii_case(id) || m.name.eq_ignore_ascii_case(id))
+}
+
+/// Human-readable `--explain` output for a single rule.
+pub fn render_explain(meta: &RuleMeta) -> String {
+    format!(
+        "{}  {}  ({})\n\n{}\n\nExample:\n{}\n\nHow to fix:\n  {}",
+        meta.id, meta.name, meta.severity, meta.description, meta.example, meta.fix
+    )
+}
+
+/// `--explain` list of every known rule (id, name, severity, one-liner).
+pub fn render_explain_all() -> String {
+    let mut out = String::from("sorseal analyze rules\n");
+    for meta in all_rules() {
+        out.push_str(&format!(
+            "  {}  {}  ({})  — {}\n",
+            meta.id, meta.name, meta.severity, meta.short_desc
+        ));
     }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// JSON rendering
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// JSON rendering
+// ---------------------------------------------------------------------------
+
+/// A single artifact's analysis as a JSON value. Finding order is the same
+/// deterministic (file -> line -> rule) order used to compute the digest, so
+/// the JSON document's `digest` matches the console summary's.
+pub fn analysis_json(project: &str, artifact: &str, analysis: &Analysis) -> serde_json::Value {
+    let findings: Vec<serde_json::Value> = analysis
+        .findings
+        .iter()
+        .map(|f| {
+            serde_json::json!({
+                "rule": f.rule.as_str(),
+                "rule_name": f.rule.name(),
+                "severity": f.severity.as_str(),
+                "file": f.file,
+                "line": f.line,
+                "message": f.message,
+                "remediation": f.remediation,
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "project": project,
+        "artifact": artifact,
+        "ok": analysis.ok,
+        "findings": findings,
+        "counts": {
+            "critical": analysis.count_by_severity(Severity::Critical),
+            "high": analysis.count_by_severity(Severity::High),
+            "medium": analysis.count_by_severity(Severity::Medium),
+            "low": analysis.count_by_severity(Severity::Low),
+        },
+        "digest": analysis.digest(),
+        "worst_severity": analysis.worst_severity().map(|s| s.as_str()),
+    })
+}
+
+/// The full machine-readable `--format json` document for one or more
+/// artifacts (deterministic: same digest as the console output).
+pub fn render_json(project: &str, artifacts: &[(String, Analysis)]) -> serde_json::Value {
+    let artifact_values: Vec<serde_json::Value> = artifacts
+        .iter()
+        .map(|(id, analysis)| analysis_json(project, id, analysis))
+        .collect();
+    let total: usize = artifacts.iter().map(|(_, a)| a.findings.len()).sum();
+    serde_json::json!({
+        "project": project,
+        "artifacts": artifact_values,
+        "total_findings": total,
+    })
 }
 
 #[cfg(test)]
@@ -832,5 +1184,180 @@ mod tests {
         assert!(rules.is_array());
         let results = sarif_results(&a.findings);
         assert!(results.is_array());
+    }
+
+    #[test]
+    fn every_rule_has_explain_metadata() {
+        let metas = all_rules();
+        assert_eq!(metas.len(), 6);
+        for meta in &metas {
+            assert!(!render_explain(meta).is_empty(), "{} must render", meta.id);
+            assert!(meta.description.contains(' '));
+            assert!(!meta.fix.is_empty());
+            // every RuleId variant is covered exactly once
+            assert_eq!(
+                metas.iter().filter(|m| m.rule == meta.rule).count(),
+                1,
+                "{} listed more than once",
+                meta.id
+            );
+        }
+        // resolution by id and by name
+        assert!(rule_from_id("sorseal-105").is_some());
+        assert!(rule_from_id("unchecked-transfer").is_some());
+        assert!(rule_from_id("SORSEAL-999").is_none());
+        // the table lists every RuleId variant
+        for id in [
+            RuleId::MissingAuth,
+            RuleId::Reentrancy,
+            RuleId::UncheckedArithmetic,
+            RuleId::PanicOnInput,
+            RuleId::UncheckedTransfer,
+            RuleId::MissingReentrancyGuard,
+        ] {
+            assert_eq!(all_rules().iter().filter(|m| m.rule == id).count(), 1);
+        }
+    }
+
+    #[test]
+    fn fail_on_threshold_gate() {
+        let a = analyze_source("pub fn f(env: Env) { panic!(); }");
+        assert!(!a.has_findings_at_or_above(Severity::Critical));
+        assert!(!a.has_findings_at_or_above(Severity::High));
+        assert!(!a.has_findings_at_or_above(Severity::Medium));
+        // panic! on a non-value line still produces Low? it does not fire
+        // PanicOnInput (requires a valueish line), so assert the clean case:
+        let a = analyze_source("pub fn g(env: Env) { let amount = balance().unwrap(); }");
+        assert!(a.has_findings_at_or_above(Severity::Low));
+        assert!(!a.has_findings_at_or_above(Severity::Medium));
+    }
+
+    #[test]
+    fn json_output_is_structured_and_matches_console() {
+        let a = analyze_source(
+            "pub fn withdraw(env: Env, to: Address, amount: i128) {\n    env.transfer(&to, &amount);\n}",
+        );
+        let v = analysis_json("proj", "art", &a);
+        assert_eq!(v["project"], "proj");
+        assert_eq!(v["artifact"], "art");
+        assert!(v["ok"].as_bool().unwrap());
+        let findings = v["findings"].as_array().unwrap();
+        assert!(!findings.is_empty());
+        assert_eq!(findings[0]["severity"].as_str().unwrap(), "Critical");
+        assert!(v["counts"]["critical"].as_u64().unwrap() >= 1);
+        assert_eq!(v["digest"].as_str().unwrap(), a.digest());
+        // deterministic order: file then line then rule
+        let lines: Vec<u32> = findings
+            .iter()
+            .map(|f| f["line"].as_u64().unwrap() as u32)
+            .collect();
+        assert!(
+            lines.windows(2).all(|w| w[0] <= w[1]),
+            "findings not line-sorted"
+        );
+    }
+
+    #[test]
+    fn inline_suppression_hides_one_rule() {
+        let src = r#"
+            pub fn redeem(env: Env) -> i128 {
+                // sorseal:ignore SORSEAL-104 reviewed: guarded above
+                let balance: i128 = env.storage().persistent().get(&Symbol::new("balance")).unwrap();
+                balance
+            }
+        "#;
+        let a = analyze_source(src);
+        assert!(
+            !a.findings.iter().any(|f| f.rule == RuleId::PanicOnInput),
+            "suppressed finding still present: {:?}",
+            a.findings
+        );
+        // an unrelated inline comment does not suppress
+        let src2 = r#"
+            pub fn redeem2(env: Env) -> i128 {
+                // sorseal:ignore SORSEAL-101 reviewed: unrelated
+                let balance: i128 = env.storage().persistent().get(&Symbol::new("rate")).unwrap();
+                balance
+            }
+        "#;
+        let a2 = analyze_source(src2);
+        assert!(
+            a2.findings.iter().any(|f| f.rule == RuleId::PanicOnInput),
+            "unrelated suppression leaked through: {:?}",
+            a2.findings
+        );
+    }
+
+    #[test]
+    fn suppression_changes_digest_and_no_ignore_restores() {
+        let src = r#"
+            pub fn redeem(env: Env) -> i128 {
+                // sorseal:ignore SORSEAL-104
+                let balance: i128 = env.storage().persistent().get(&Symbol::new("rate")).unwrap();
+                balance
+            }
+        "#;
+        let suppressed = analyze_source(src);
+        let dir = tempdir().unwrap();
+        let src_dir = dir.path().join("src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::write(src_dir.join("lib.rs"), src).unwrap();
+        let unsuppressed =
+            analyze_tree_with(dir.path(), &["target"], &AnalyzeOptions { no_ignore: true })
+                .unwrap();
+        assert_ne!(suppressed.digest(), unsuppressed.digest());
+        assert!(
+            suppressed
+                .findings
+                .iter()
+                .all(|f| f.rule != RuleId::PanicOnInput),
+            "no_ignore=false must suppress: {:?}",
+            suppressed.findings
+        );
+        assert!(
+            unsuppressed
+                .findings
+                .iter()
+                .any(|f| f.rule == RuleId::PanicOnInput),
+            "no_ignore=true must restore: {:?}",
+            unsuppressed.findings
+        );
+    }
+
+    #[test]
+    fn detects_unchecked_transfer() {
+        let src = r#"
+            pub fn sweep(env: Env, to: Address) {
+                let amount = SOME_CONSTANT;
+                token::Client::new(&env, &to).transfer(&env.current_contract_address(), &to, &amount);
+            }
+        "#;
+        let a = analyze_source(src);
+        assert!(
+            a.findings
+                .iter()
+                .any(|f| f.rule == RuleId::UncheckedTransfer),
+            "expected SORSEAL-105, got {:?}",
+            a.findings
+        );
+    }
+
+    #[test]
+    fn no_unchecked_transfer_when_balance_read_first() {
+        let src = r#"
+            pub fn sweep(env: Env, to: Address) {
+                let balance: i128 = env.ledger().balance(&env.current_contract_address());
+                let amount = balance;
+                token::Client::new(&env, &to).transfer(&env.current_contract_address(), &to, &amount);
+            }
+        "#;
+        let a = analyze_source(src);
+        assert!(
+            !a.findings
+                .iter()
+                .any(|f| f.rule == RuleId::UncheckedTransfer),
+            "balance-checked transfer should not fire SORSEAL-105: {:?}",
+            a.findings
+        );
     }
 }

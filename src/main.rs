@@ -156,6 +156,15 @@ enum Command {
         /// Output format
         #[arg(long, value_enum, default_value = "console")]
         format: AnalyzeFormat,
+        /// Fail (exit non-zero) when findings at or above this severity exist
+        #[arg(long, value_enum)]
+        fail_on: Option<SeverityArg>,
+        /// Explain a rule (id or name), or all rules when given no value
+        #[arg(long, num_args = 0..=1, default_missing_value = "all", value_name = "RULE")]
+        explain: Option<String>,
+        /// Do not honor inline `// sorseal:ignore` suppressions
+        #[arg(long)]
+        no_ignore: bool,
         /// Also write the findings as a SARIF 2.1.0 report to this path
         #[arg(long)]
         sarif: Option<String>,
@@ -212,10 +221,37 @@ enum ReportFormat {
     Markdown,
 }
 
-#[derive(Clone, Copy, ValueEnum)]
+#[derive(Clone, Copy, PartialEq, ValueEnum)]
 enum AnalyzeFormat {
     Console,
     Markdown,
+    Json,
+}
+
+/// Severity threshold for `analyze --fail-on`. Title-case is the canonical
+/// spelling; lowercase is accepted via aliases so `--fail-on critical` and
+/// `--fail-on Critical` both work.
+#[derive(Clone, Copy, ValueEnum)]
+enum SeverityArg {
+    #[value(name = "Low", alias = "low")]
+    Low,
+    #[value(name = "Medium", alias = "medium")]
+    Medium,
+    #[value(name = "High", alias = "high")]
+    High,
+    #[value(name = "Critical", alias = "critical")]
+    Critical,
+}
+
+impl SeverityArg {
+    fn to_severity(self) -> analyze::Severity {
+        match self {
+            SeverityArg::Low => analyze::Severity::Low,
+            SeverityArg::Medium => analyze::Severity::Medium,
+            SeverityArg::High => analyze::Severity::High,
+            SeverityArg::Critical => analyze::Severity::Critical,
+        }
+    }
 }
 
 fn main() -> ExitCode {
@@ -517,13 +553,36 @@ fn run(cli: Cli) -> anyhow::Result<u8> {
             manifest,
             provenance,
             format,
+            fail_on,
+            explain,
+            no_ignore,
             sarif,
             seal,
             ignore,
         } => {
             let cwd = std::env::current_dir()?;
+
+            // `--explain` is self-contained documentation: no scan runs.
+            if explain.is_some() {
+                let name = explain.as_deref().unwrap_or("all");
+                if name.eq_ignore_ascii_case("all") || name.eq_ignore_ascii_case("list") {
+                    print!("{}", analyze::render_explain_all());
+                } else {
+                    match analyze::rule_from_id(name) {
+                        Some(meta) => print!("{}", analyze::render_explain(&meta)),
+                        None => {
+                            bail!(
+                                "unknown rule '{name}' — run `sorseal analyze --explain` to list rules"
+                            );
+                        }
+                    }
+                }
+                return Ok(0);
+            }
+
             let m = Manifest::load(&cwd.join(&manifest))?;
             let ignore: Vec<&str> = ignore.iter().map(|s| s.as_str()).collect();
+            let opts = analyze::AnalyzeOptions { no_ignore };
             let mut exit_code = 0;
             let mut provenance_for_seal = if seal {
                 let prov_path = cwd.join(&provenance);
@@ -540,6 +599,7 @@ fn run(cli: Cli) -> anyhow::Result<u8> {
             };
             let mut all_findings: Vec<analyze::Finding> = Vec::new();
             let mut artifact_analyses: Vec<String> = Vec::new();
+            let mut analyzed: Vec<(String, analyze::Analysis)> = Vec::new();
 
             for a in &m.artifacts {
                 if let Some(id) = &artifact {
@@ -548,7 +608,7 @@ fn run(cli: Cli) -> anyhow::Result<u8> {
                     }
                 }
                 let source_abs = cwd.join(&a.source_root);
-                let analysis = analyze::analyze_tree(&source_abs, &ignore)?;
+                let analysis = analyze::analyze_tree_with(&source_abs, &ignore, &opts)?;
                 match format {
                     AnalyzeFormat::Console => {
                         println!(
@@ -561,6 +621,9 @@ fn run(cli: Cli) -> anyhow::Result<u8> {
                             "{}",
                             analyze::render_markdown(&m.project.name, &a.id, &analysis)
                         );
+                    }
+                    AnalyzeFormat::Json => {
+                        analyzed.push((a.id.clone(), analysis.clone()));
                     }
                 }
                 if let Some(analysis_digest) = provenance_for_seal.as_mut() {
@@ -580,11 +643,38 @@ fn run(cli: Cli) -> anyhow::Result<u8> {
                             analyzed_at: sorseal::clock::now_rfc3339_utc(),
                         });
                 }
-                if !analysis.ok || !analysis.findings.is_empty() {
-                    exit_code = max_code(exit_code, if !analysis.ok { 2 } else { 1 });
+                // A scan that walked no source is an error; otherwise the
+                // findings gate (--fail-on) decides the exit status. Without
+                // --fail-on, analysis is report-only (exit 0).
+                if !analysis.ok {
+                    exit_code = max_code(exit_code, 2);
+                } else if let Some(threshold) = fail_on {
+                    if analysis.has_findings_at_or_above(threshold.to_severity()) {
+                        let n = analysis
+                            .findings
+                            .iter()
+                            .filter(|f| f.severity >= threshold.to_severity())
+                            .count();
+                        println!();
+                        println!(
+                            "FAIL: {n} finding(s) at or above {} severity",
+                            threshold.to_severity().as_str()
+                        );
+                        exit_code = max_code(exit_code, 1);
+                    }
                 }
                 artifact_analyses.push(a.id.clone());
                 all_findings.extend(analysis.findings);
+            }
+
+            if format == AnalyzeFormat::Json && !analyzed.is_empty() {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&analyze::render_json(
+                        &m.project.name,
+                        &analyzed
+                    ))?
+                );
             }
 
             if let Some(sarif_path) = sarif {

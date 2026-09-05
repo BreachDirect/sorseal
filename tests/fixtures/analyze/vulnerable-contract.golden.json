@@ -1,0 +1,138 @@
+{
+  "artifacts": [
+    {
+      "artifact": "vulnerable-contract",
+      "counts": {
+        "critical": 4,
+        "high": 2,
+        "low": 1,
+        "medium": 6
+      },
+      "digest": "b911e3584977a717131fca242a183e3d40ecdbf49f29b1caad90a3be8d3fbf5c",
+      "findings": [
+        {
+          "file": "src/lib.rs",
+          "line": 23,
+          "message": "function mutates contract state or moves value without `require_auth`; an unauthenticated caller may drive changes",
+          "remediation": "Call `env.current_contract_address().require_auth()` (or `require_auth_for_args`) before any state mutation that affects value.",
+          "rule": "SORSEAL-101",
+          "rule_name": "missing-authorization",
+          "severity": "Critical"
+        },
+        {
+          "file": "src/lib.rs",
+          "line": 25,
+          "message": "unchecked arithmetic on a likely value quantity; consider `checked_add/sub/mul` to guard against overflow",
+          "remediation": "Use `checked_add`, `checked_sub`, `checked_mul` on I128/amounts and handle `None` with a revert.",
+          "rule": "SORSEAL-103",
+          "rule_name": "unchecked-arithmetic",
+          "severity": "Medium"
+        },
+        {
+          "file": "src/lib.rs",
+          "line": 32,
+          "message": "function mutates contract state or moves value without `require_auth`; an unauthenticated caller may drive changes",
+          "remediation": "Call `env.current_contract_address().require_auth()` (or `require_auth_for_args`) before any state mutation that affects value.",
+          "rule": "SORSEAL-101",
+          "rule_name": "missing-authorization",
+          "severity": "Critical"
+        },
+        {
+          "file": "src/lib.rs",
+          "line": 32,
+          "message": "possible reentrancy: the function mutates state and makes an external/invoke call without `require_auth`",
+          "remediation": "Apply a `non_reentrant` guard, move the external call after all state updates, or rely on `require_auth` of the target.",
+          "rule": "SORSEAL-102",
+          "rule_name": "reentrancy",
+          "severity": "High"
+        },
+        {
+          "file": "src/lib.rs",
+          "line": 32,
+          "message": "unchecked arithmetic on a likely value quantity; consider `checked_add/sub/mul` to guard against overflow",
+          "remediation": "Use `checked_add`, `checked_sub`, `checked_mul` on I128/amounts and handle `None` with a revert.",
+          "rule": "SORSEAL-103",
+          "rule_name": "unchecked-arithmetic",
+          "severity": "Medium"
+        },
+        {
+          "file": "src/lib.rs",
+          "line": 35,
+          "message": "unchecked arithmetic on a likely value quantity; consider `checked_add/sub/mul` to guard against overflow",
+          "remediation": "Use `checked_add`, `checked_sub`, `checked_mul` on I128/amounts and handle `None` with a revert.",
+          "rule": "SORSEAL-103",
+          "rule_name": "unchecked-arithmetic",
+          "severity": "Medium"
+        },
+        {
+          "file": "src/lib.rs",
+          "line": 37,
+          "message": "external `invoke_contract`/`call_contract` call detected without an adjacent `non_reentrant` guard",
+          "remediation": "Consider guarding the calling function with `#[non_reentrant]` to prevent reentrant entry.",
+          "rule": "SORSEAL-106",
+          "rule_name": "missing-reentrancy-guard",
+          "severity": "Medium"
+        },
+        {
+          "file": "src/lib.rs",
+          "line": 42,
+          "message": "function mutates contract state or moves value without `require_auth`; an unauthenticated caller may drive changes",
+          "remediation": "Call `env.current_contract_address().require_auth()` (or `require_auth_for_args`) before any state mutation that affects value.",
+          "rule": "SORSEAL-101",
+          "rule_name": "missing-authorization",
+          "severity": "Critical"
+        },
+        {
+          "file": "src/lib.rs",
+          "line": 42,
+          "message": "token `.transfer`/`.transfer_from` call with no prior balance/allowance read; the transferred amount is not derived from what this contract actually holds",
+          "remediation": "Read `env.ledger().balance(...)` (or a stored allowance) first and derive the amount from it, or add a `require_auth`-guarded allowance check before transferring.",
+          "rule": "SORSEAL-105",
+          "rule_name": "unchecked-transfer",
+          "severity": "High"
+        },
+        {
+          "file": "src/lib.rs",
+          "line": 49,
+          "message": "function mutates contract state or moves value without `require_auth`; an unauthenticated caller may drive changes",
+          "remediation": "Call `env.current_contract_address().require_auth()` (or `require_auth_for_args`) before any state mutation that affects value.",
+          "rule": "SORSEAL-101",
+          "rule_name": "missing-authorization",
+          "severity": "Critical"
+        },
+        {
+          "file": "src/lib.rs",
+          "line": 49,
+          "message": "unchecked arithmetic on a likely value quantity; consider `checked_add/sub/mul` to guard against overflow",
+          "remediation": "Use `checked_add`, `checked_sub`, `checked_mul` on I128/amounts and handle `None` with a revert.",
+          "rule": "SORSEAL-103",
+          "rule_name": "unchecked-arithmetic",
+          "severity": "Medium"
+        },
+        {
+          "file": "src/lib.rs",
+          "line": 55,
+          "message": "unchecked arithmetic on a likely value quantity; consider `checked_add/sub/mul` to guard against overflow",
+          "remediation": "Use `checked_add`, `checked_sub`, `checked_mul` on I128/amounts and handle `None` with a revert.",
+          "rule": "SORSEAL-103",
+          "rule_name": "unchecked-arithmetic",
+          "severity": "Medium"
+        },
+        {
+          "file": "src/lib.rs",
+          "line": 59,
+          "message": "`panic!` or `unwrap()` on a code path that may be reachable from callers; prefer returning a Result and reverting with a clear error",
+          "remediation": "Replace panics with `Result` and use `?`/`ensure!` so callers (and the front-end) can handle failures gracefully.",
+          "rule": "SORSEAL-104",
+          "rule_name": "panic-on-user-input",
+          "severity": "Low"
+        }
+      ],
+      "ok": true,
+      "project": "vulnerable-contract",
+      "worst_severity": "Critical"
+    }
+  ],
+  "project": "vulnerable-contract",
+  "total_findings": 13
+}

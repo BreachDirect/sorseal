@@ -37,10 +37,21 @@ impl Vulnerable {
         env.invoke_contract::<i128>(&deposit, &Symbol::new("apply"), (&deposit,))
     }
 
+    // VULN-E (High): transfers a hard-coded amount without first reading the
+    // contract's balance or allowance — a balance-insensitive drain vector.
+    pub fn sweep(env: Env, to: Address) {
+        let amount: i128 = 1_000_000; // no balance read / allowance check
+        token::Client::new(&env, &to).transfer(&env.current_contract_address(), &to, &amount);
+    }
+
     // VULN-D (Low): panics / unwraps on a caller-reachable value path instead
     // of returning a Result.
     pub fn redeem(env: Env, share: i128) -> i128 {
-        let rate: i128 = env.storage().persistent().get(&Symbol::new("rate")).unwrap();
+        let rate: i128 = env
+            .storage()
+            .persistent()
+            .get(&Symbol::new("rate"))
+            .unwrap();
         let principal: i128 = share * rate; // VULN-C
         if principal > 0 {
             env.storage().persistent().set(&BALANCE, &principal);

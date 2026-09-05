@@ -120,12 +120,21 @@ $ sorseal analyze
 Sorseal — vulnerable-contract analyze :: vulnerable-contract
 
 Critical  SORSEAL-101  src/lib.rs:23 — function mutates contract state or moves value without `require_auth`; an unauthenticated caller may drive changes
-High      SORSEAL-102  src/lib.rs:32 — possible reentrancy: the function mutates state and makes an external/invoke call without `require_auth`
 Medium    SORSEAL-103  src/lib.rs:25 — unchecked arithmetic on a likely value quantity; consider `checked_add/sub/mul` to guard against overflow
-Low       SORSEAL-104  src/lib.rs:48 — `panic!` or `unwrap()` on a code path that may be reachable from callers; prefer returning a Result and reverting with a clear error
+Critical  SORSEAL-101  src/lib.rs:32 — function mutates contract state or moves value without `require_auth`; an unauthenticated caller may drive changes
+High      SORSEAL-102  src/lib.rs:32 — possible reentrancy: the function mutates state and makes an external/invoke call without `require_auth`
+Medium    SORSEAL-103  src/lib.rs:32 — unchecked arithmetic on a likely value quantity; consider `checked_add/sub/mul` to guard against overflow
+Medium    SORSEAL-103  src/lib.rs:35 — unchecked arithmetic on a likely value quantity; consider `checked_add/sub/mul` to guard against overflow
+Medium    SORSEAL-106  src/lib.rs:37 — external `invoke_contract`/`call_contract` call detected without an adjacent `non_reentrant` guard
+Critical  SORSEAL-101  src/lib.rs:42 — function mutates contract state or moves value without `require_auth`; an unauthenticated caller may drive changes
+High      SORSEAL-105  src/lib.rs:42 — token `.transfer`/`.transfer_from` call with no prior balance/allowance read; the transferred amount is not derived from what this contract actually holds
+Critical  SORSEAL-101  src/lib.rs:49 — function mutates contract state or moves value without `require_auth`; an unauthenticated caller may drive changes
+Medium    SORSEAL-103  src/lib.rs:49 — unchecked arithmetic on a likely value quantity; consider `checked_add/sub/mul` to guard against overflow
+Medium    SORSEAL-103  src/lib.rs:55 — unchecked arithmetic on a likely value quantity; consider `checked_add/sub/mul` to guard against overflow
+Low       SORSEAL-104  src/lib.rs:59 — `panic!` or `unwrap()` on a code path that may be reachable from callers; prefer returning a Result and reverting with a clear error
 
-11 findings — Critical: 3 · High: 1 · Medium: 6 · Low: 1
-analysis digest sha256 c4f56e1272d8
+13 findings — Critical: 4 · High: 2 · Medium: 6 · Low: 1
+analysis digest sha256 b911e3584977
 ```
 
 Detection rules (each with a stable id, severity, and remediation):
@@ -136,14 +145,44 @@ Detection rules (each with a stable id, severity, and remediation):
 | `SORSEAL-102` reentrancy | High | External call after state mutation, no guard |
 | `SORSEAL-103` unchecked-arithmetic | Medium | Raw `+`/`-`/`*` on amounts instead of `checked_*` |
 | `SORSEAL-104` panic-on-input | Low | `panic!`/`unwrap()` on a caller-reachable value path |
+| `SORSEAL-105` unchecked-transfer | High | `.transfer`/`.transfer_from` amount not derived from a prior balance/allowance read |
 | `SORSEAL-106` missing-reentrancy-guard | Medium | `invoke_contract`/`call_contract` without `non_reentrant` |
 
-Output as Markdown (audit deliverable) or SARIF (code scanning):
+Output as JSON, Markdown (audit deliverable), or SARIF (code scanning):
 
 ```bash
+sorseal analyze --format json        # machine-readable findings + digest
 sorseal analyze --format markdown > audit.md
 sorseal analyze --sarif findings.sarif
 ```
+
+Run `sorseal analyze` as a CI gate with a severity threshold — the process
+exits non-zero when findings at or above the threshold exist:
+
+```bash
+sorseal analyze --fail-on High       # gate the build on no High/Critical findings
+```
+
+Neither `--fail-on` nor any other flag needs to be set for ordinary use:
+without a gate, `analyze` is report-only and exits 0 even with findings.
+
+Explain a rule without scanning, and build suppressions for reviewed/acceptable
+findings:
+
+```bash
+sorseal analyze --explain SORSEAL-105   # guidance + fix for one rule
+sorseal analyze --explain               # list every rule
+```
+
+```rust
+// sorseal:ignore SORSEAL-104 reviewed: this input is validated by the caller
+let rate: i128 = env.storage().instance().get(&KEY).unwrap();
+```
+
+Findings tagged with `// sorseal:ignore <RULE>` on the line above are dropped
+(counts, SARIF, and the sealed digest all exclude them); add `--no-ignore` to
+temporarily see everything. Because suppressions change the finding set, a
+suppressed run seals a different digest than an unsuppressed one.
 
 And because the audit itself must be tamper-evident, the finding digest can be
 sealed into the provenance record alongside the wasm + source digests:
@@ -309,11 +348,12 @@ Current shipped & in-flight capabilities:
 | Upgrade-lineage audit | `onchain-audit` | shipped |
 | On-chain demo (no funds) | `simulate-onchain` | shipped |
 | File integrity watch | `watch` | shipped |
-| Vulnerability scan | `analyze` | shipped (core rules) |
-| Vulnerability CI gate | `analyze --fail-on` | **issue open — help wanted** |
-| JSON findings output | `analyze --json` | **issue open — help wanted** |
-| Self-documenting rules | `analyze --explain` | **issue open — help wanted** |
-| Finding suppressions | `analyze` (inline/config) | **issue open — help wanted** |
+| Vulnerability scan | `analyze` (6 rules, `--seal`) | shipped |
+| Vulnerability CI gate | `analyze --fail-on <severity>` | shipped |
+| JSON findings output | `analyze --format json` | shipped |
+| Self-documenting rules | `analyze --explain [RULE]` | shipped |
+| Finding suppressions | `analyze` inline `// sorseal:ignore` | shipped |
+| Golden-file digest tests | `tests/analyze_golden.rs` | shipped |
 
 ## License
 
