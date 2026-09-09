@@ -393,11 +393,13 @@ fn analyze_file(
 ) -> Result<()> {
     let contents = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read {}", path.display()))?;
-    let rel = path
+    let rel: String = path
         .strip_prefix(root)
         .unwrap_or(path)
-        .display()
-        .to_string();
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("/");
 
     // A coarse function-extent detector: we split the file into blocks
     // delimited by braces at the top level of each `fn`. For rules that need
