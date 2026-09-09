@@ -60,4 +60,37 @@ impl Vulnerable {
         }
         principal
     }
+
+    // VULN-F (Medium, SORSEAL-107): hardcoded `Symbol::new("...")` used
+    // directly as a persistent storage key — collision risk across upgrades.
+    pub fn cache_price(env: Env, price: i128) {
+        env.storage()
+            .persistent()
+            .set(&Symbol::new("price"), &price);
+    }
+
+    // VULN-G (Critical, SORSEAL-108): nobody writes `unsafe` in a Soroban
+    // contract deliberately — its presence indicates a copied/MisAI-merged
+    // code path that must be reviewed before deploy.
+    pub fn reset(env: Env) {
+        unsafe { core::ptr::write_volatile(core::ptr::null_mut(), 0u8) }
+        let _ = env.storage().instance().set(&LOCKED, &false);
+    }
+
+    // VULN-H (Low, SORSEAL-109): unwraps the result of a storage `.get()` —
+    // if the key is absent this panics and reverts the whole transaction.
+    pub fn get_rate(env: Env) -> i128 {
+        env.storage()
+            .persistent()
+            .get::<Symbol, i128>(&Symbol::new("rate"))
+            .unwrap()
+            .unwrap_or_else(|| panic!("rate missing"))
+    }
+
+    // VULN-I (Medium, SORSEAL-110): the owner/admin key is written once and
+    // there is no `transfer_ownership`/`set_admin` rotation path anywhere.
+    pub fn init_owner(env: Env, owner: Address) {
+        owner.require_auth();
+        env.storage().persistent().set(&OWNER, &owner);
+    }
 }

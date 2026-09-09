@@ -64,8 +64,9 @@ cargo run -- report --format markdown
 
 The end-to-end demo (`scripts/demo.sh`) deploys a real contract to testnet and
 runs `onchain-verify` + `onchain-audit` against it — see the README
-["End-to-end demo"](#end-to-end-demo) section. It needs the `stellar` CLI
-(`cargo install soroban-cli --locked`) but nothing else outside the repo.
+["On-chain demo without funds"](#on-chain-demo-without-funds) section for the
+fund-free `simulate-onchain` variant. The live demo needs the `stellar` CLI
+(`cargo install soroban-cli --locked`) plus a funded testnet account.
 
 ---
 
