@@ -8,7 +8,7 @@ use sorseal::analyze;
 use sorseal::manifest::Manifest;
 use sorseal::provenance::{Provenance, PROVENANCE_FILENAME};
 use sorseal::sign::ATTESTATION_FILENAME;
-use sorseal::{onchain, report, runner, scaffold, sign, watch};
+use sorseal::{hook, onchain, report, runner, scaffold, sign, watch};
 use std::fs;
 use std::process::ExitCode;
 
@@ -212,6 +212,12 @@ enum Command {
         #[arg(long)]
         provenance: Option<String>,
     },
+    /// Install/uninstall a git pre-commit hook that gates on provenance + analysis
+    Hook {
+        /// What to do with the hook
+        #[command(subcommand)]
+        action: HookAction,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -219,6 +225,16 @@ enum ReportFormat {
     Console,
     Json,
     Markdown,
+}
+
+#[derive(Subcommand)]
+enum HookAction {
+    /// Install a pre-commit hook (verify + analyze --fail-on High)
+    Install,
+    /// Remove the sorseal pre-commit hook
+    Uninstall,
+    /// Show whether the hook is installed
+    Status,
 }
 
 #[derive(Clone, Copy, PartialEq, ValueEnum)]
@@ -760,6 +776,30 @@ fn run(cli: Cli) -> anyhow::Result<u8> {
             println!("{}", sorseal::audit::render_audit(&report));
             let fail = report.provenance_supplied && !report.current_attested;
             Ok(if fail { 1 } else { 0 })
+        }
+
+        Command::Hook { action } => {
+            let cwd = std::env::current_dir()?;
+            match action {
+                HookAction::Install => {
+                    let path = hook::install(&cwd)?;
+                    println!("sorseal pre-commit hook installed at {}", path.display());
+                    println!(
+                        "it will run `sorseal verify` and `sorseal analyze --fail-on High` before every commit"
+                    );
+                    Ok(0)
+                }
+                HookAction::Uninstall => {
+                    hook::uninstall(&cwd)?;
+                    println!("sorseal pre-commit hook removed");
+                    Ok(0)
+                }
+                HookAction::Status => {
+                    let status = hook::render_status(&cwd)?;
+                    println!("{status}");
+                    Ok(if status.contains("installed") { 0 } else { 1 })
+                }
+            }
         }
     }
 }

@@ -12,6 +12,7 @@ pub mod audit;
 pub mod clock;
 pub mod digest;
 pub mod git;
+pub mod hook;
 pub mod manifest;
 pub mod onchain;
 pub mod provenance;
