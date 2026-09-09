@@ -1,6 +1,6 @@
 [package]
 name = "sorseal"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Provenance for Soroban/WASM artifacts — prove deployed bytecode matches source."
 license = "MIT"
