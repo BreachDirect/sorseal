@@ -31,6 +31,10 @@ pub enum RuleId {
     AdminKeyNeverRotated,
     MissingTokenBalanceCheck,
     UncheckedEnvCaller,
+    OraclePriceFeed,
+    FlashLoanApprove,
+    WasmUnreachableExport,
+    WasmNoExports,
 }
 
 impl RuleId {
@@ -49,6 +53,10 @@ impl RuleId {
             RuleId::AdminKeyNeverRotated => "SORSEAL-110",
             RuleId::MissingTokenBalanceCheck => "SORSEAL-111",
             RuleId::UncheckedEnvCaller => "SORSEAL-112",
+            RuleId::OraclePriceFeed => "SORSEAL-113",
+            RuleId::FlashLoanApprove => "SORSEAL-114",
+            RuleId::WasmUnreachableExport => "SORSEAL-115",
+            RuleId::WasmNoExports => "SORSEAL-116",
         }
     }
 
@@ -66,6 +74,10 @@ impl RuleId {
             RuleId::AdminKeyNeverRotated => "admin-key-never-rotated",
             RuleId::MissingTokenBalanceCheck => "missing-token-balance-check",
             RuleId::UncheckedEnvCaller => "unchecked-env-caller",
+            RuleId::OraclePriceFeed => "oracle-price-feed",
+            RuleId::FlashLoanApprove => "flash-loan-approve",
+            RuleId::WasmUnreachableExport => "wasm-unreachable-export",
+            RuleId::WasmNoExports => "wasm-no-exports",
         }
     }
 }
@@ -101,6 +113,30 @@ impl Severity {
     }
 }
 
+/// How much the lexical rule engine believes this finding is a real bug,
+/// independent of damage potential. Exact bytecode/pattern matches are `High`;
+/// the heuristic, pattern-based rules (unchecked transfer, oracle reads, …)
+/// are `Low`/`Medium` because they need data-flow context to be certain. This
+/// mirrors how tools like `semgrep` and `rapidgator` separate *impact*
+/// (severity) from *certainty* (confidence) so a 13-finding report can be
+/// triaged without treating every line as equally urgent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Confidence {
+    Low,
+    Medium,
+    High,
+}
+
+impl Confidence {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Confidence::Low => "low",
+            Confidence::Medium => "medium",
+            Confidence::High => "high",
+        }
+    }
+}
+
 /// A single static-analysis finding, tied to a source location.
 #[derive(Debug, Clone)]
 pub struct Finding {
@@ -110,6 +146,16 @@ pub struct Finding {
     pub file: String,
     pub line: u32,
     pub remediation: &'static str,
+}
+
+impl Finding {
+    /// Certainty score for this finding. Derived from the rule's durable
+    /// metadata (not stored per-finding) so the sealed analysis digest is
+    /// untouched — confidence is a property of the rule, not of an individual
+    /// match an attacker could tamper with.
+    pub fn confidence(&self) -> Confidence {
+        rule_meta(self.rule).confidence
+    }
 }
 
 /// The result of analyzing one artifact: whether analysis completed and the
@@ -358,11 +404,20 @@ fn analyze_file(
     // to know whether a function performed auth or a state mutation, we
     // analyse per-function by scanning for a `fn` keyword on its own segment.
     let lines: Vec<&str> = contents.lines().collect();
+    // Strip comments/string literals once per line. Every rule below operates
+    // on these precomputed views instead of re-lexing each line ten+ times
+    // through `strip_comments_and_strings`; on a monorepo-sized tree this is
+    // the difference between linear and ~16x-constant scanning.
+    let stripped: Vec<String> = lines
+        .iter()
+        .map(|l| strip_comments_and_strings(l))
+        .collect();
+    let lowered: Vec<String> = stripped.iter().map(|l| l.to_ascii_lowercase()).collect();
     // Test modules are never deployed, so findings inside `#[cfg(test)]` /
     // `mod tests` blocks are noise. Compute those extents and skip any
     // function that starts within one.
-    let test_ranges = test_block_ranges(&lines);
-    let functions = split_functions(&lines);
+    let test_ranges = test_block_ranges(&stripped);
+    let functions = split_functions(&stripped);
 
     // Findings for this file only — used to apply inline suppressions after
     // the rules have run.
@@ -371,21 +426,24 @@ fn analyze_file(
     if functions.is_empty() {
         // No explicit fn blocks (e.g. a pure macro-heavy file): still run the
         // line-local rules across the whole file, but exclude test regions.
-        run_line_rules(&lines, &rel, analysis, None, 0);
+        run_line_rules(&stripped[..], &rel, analysis, None, 0);
     } else {
         for fun in &functions {
             let (start, end) = (fun.0, fun.1);
+            let end = end.min(lines.len());
             if test_ranges.iter().any(|(s, e)| start >= *s && start < *e) {
                 continue;
             }
             run_function_rules(
-                &lines[start..end.min(lines.len())],
+                &lines[start..end],
+                &stripped[start..end],
+                &lowered[start..end],
                 &rel,
                 start as u32 + 1,
                 analysis,
             );
             run_line_rules(
-                &lines[start..end.min(lines.len())],
+                &stripped[start..end],
                 &rel,
                 analysis,
                 Some(&test_ranges),
@@ -466,14 +524,13 @@ fn inline_ignore_rules(line: &str) -> Option<Vec<String>> {
 /// matches inside them can be suppressed. A block only "closes" once its
 /// opening `{` has been seen and the brace depth returns to zero — the
 /// `#[cfg(test)]` attribute line alone does not delimit anything.
-fn test_block_ranges(lines: &[&str]) -> Vec<(usize, usize)> {
+fn test_block_ranges(lines: &[String]) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
     let mut depth = 0usize;
     let mut start: Option<usize> = None;
     let mut saw_open = false;
     let mut in_test = false;
-    for (i, raw) in lines.iter().enumerate() {
-        let line = strip_comments_and_strings(raw);
+    for (i, line) in lines.iter().enumerate() {
         if line.contains("#[cfg(test)]") {
             in_test = true;
         }
@@ -505,13 +562,12 @@ fn test_block_ranges(lines: &[&str]) -> Vec<(usize, usize)> {
 /// This is deliberately approximate: it counts braces starting from a line that
 /// begins with `fn` (after lexing), giving us the function's extent. Nested
 /// items (impls inside fns) are rare and acceptable to mishandle here.
-fn split_functions(lines: &[&str]) -> Vec<(usize, usize)> {
+fn split_functions(lines: &[String]) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
     let mut depth = 0usize;
     let mut start: Option<usize> = None;
-    for (i, raw) in lines.iter().enumerate() {
-        let line = strip_comments_and_strings(raw);
-        if start.is_none() && is_fn_signature(&line) {
+    for (i, line) in lines.iter().enumerate() {
+        if start.is_none() && is_fn_signature(line) {
             start = Some(i);
             depth = 0;
         }
@@ -555,17 +611,26 @@ fn is_fn_signature(line: &str) -> bool {
 // ---------------------------------------------------------------------------
 
 /// Run per-function rules (those needing function-level context).
+/// `fn_raw`/`fn_stripped`/`fn_lower` are the raw, comment/string-stripped, and
+/// lowercased-stripped views of the function's lines, all precomputed once per
+/// file by the caller.
 #[allow(clippy::too_many_arguments)]
-fn run_function_rules(fn_lines: &[&str], rel: &str, fn_start_1based: u32, analysis: &mut Analysis) {
+fn run_function_rules(
+    fn_raw: &[&str],
+    fn_stripped: &[String],
+    fn_lower: &[String],
+    rel: &str,
+    fn_start_1based: u32,
+    analysis: &mut Analysis,
+) {
     let mut has_auth = false;
     let mut mutates_state = false;
     let mut makes_external_call = false;
     let mut made_transfer = false;
     let mut reads_balance_or_allowance = false;
 
-    for (li, raw) in fn_lines.iter().enumerate() {
-        let line = strip_comments_and_strings(raw);
-        let lower = line.to_ascii_lowercase();
+    for (li, line) in fn_stripped.iter().enumerate() {
+        let lower = &fn_lower[li];
         let lineno = fn_start_1based + li as u32;
 
         // Authorization / reentrancy-guard detection.
@@ -692,16 +757,15 @@ fn run_function_rules(fn_lines: &[&str], rel: &str, fn_start_1based: u32, analys
     // key named OWNER/ADMIN (via Symbol::new("OWNER")) without a
     // remote_rotation/transfer pattern. The OWNER/ADMIN literal lives inside a
     // string (Symbol::new), which the lexer strips, so inspect raw lines.
-    let writes_admin_key = fn_lines.iter().any(|raw| {
-        let has_set = strip_comments_and_strings(raw).contains(".set(");
+    let writes_admin_key = fn_raw.iter().zip(fn_stripped).any(|(raw, line)| {
+        let has_set = line.contains(".set(");
         let key_is_admin = raw.contains("Symbol::new(\"OWNER\"")
             || raw.contains("Symbol::new(\"ADMIN\"")
             || raw.contains("Symbol::new(\"ADMIN_KEY\"")
             || (raw.contains("Symbol::new(\"owner\"") || raw.contains("Symbol::new(\"admin\""));
         has_set && key_is_admin
     });
-    let has_rotation = fn_lines.iter().any(|raw| {
-        let line = strip_comments_and_strings(raw);
+    let has_rotation = fn_stripped.iter().any(|line| {
         line.contains("transfer_ownership") || line.contains("rotate") || line.contains("set_admin")
     });
     if writes_admin_key && !has_rotation {
@@ -720,15 +784,13 @@ fn run_function_rules(fn_lines: &[&str], rel: &str, fn_start_1based: u32, analys
     // SORSEAL-111: missing token balance check — a function performs a token
     // operation (burn, mint, transfer) without first verifying that the
     // contract actually holds the asset or has an appropriate allowance.
-    let has_token_op = fn_lines.iter().any(|raw| {
-        let line = strip_comments_and_strings(raw);
+    let has_token_op = fn_stripped.iter().any(|line| {
         line.contains(".burn(")
             || line.contains(".mint(")
             || line.contains(".transfer(")
             || line.contains(".transfer_from(")
     });
-    let checks_balance = fn_lines.iter().any(|raw| {
-        let lower = strip_comments_and_strings(raw).to_ascii_lowercase();
+    let checks_balance = fn_lower.iter().any(|lower| {
         lower.contains("balance") || lower.contains("allowance") || lower.contains("checked_")
     });
     if has_token_op && !checks_balance {
@@ -748,14 +810,10 @@ fn run_function_rules(fn_lines: &[&str], rel: &str, fn_start_1based: u32, analys
     // SORSEAL-112: unchecked env caller — an Address parameter is used
     // (passed to transfer, used as a key, etc.) without `require_auth` on
     // that address, making it spoofable.
-    let uses_address_param = fn_lines.iter().any(|raw| {
-        let line = strip_comments_and_strings(raw);
+    let uses_address_param = fn_stripped.iter().any(|line| {
         line.contains("Address")
             && (line.contains(".transfer(") || line.contains("to:") || line.contains("&to"))
-    }) && !fn_lines.iter().any(|raw| {
-        let line = strip_comments_and_strings(raw);
-        line.contains("require_auth")
-    });
+    }) && !fn_stripped.iter().any(|line| line.contains("require_auth"));
     if uses_address_param && mutates_state {
         analysis.findings.push(Finding {
             rule: RuleId::UncheckedEnvCaller,
@@ -770,22 +828,86 @@ fn run_function_rules(fn_lines: &[&str], rel: &str, fn_start_1based: u32, analys
                           any state mutation or value transfer.",
         });
     }
+
+    // SORSEAL-113: oracle / price-feed manipulation — the function derives a
+    // financial decision from an external price read (`get_price`,
+    // `price_feed`, `.latest_price`, or an invoke returning a "price" symbol)
+    // with no staleness check and no auth on the price provider.
+    let reads_price = fn_lower.iter().any(|lower| {
+        lower.contains("get_price")
+            || lower.contains("price_feed")
+            || lower.contains("price_feed_addr")
+            || lower.contains(".latest_price")
+            || (lower.contains("invoke_contract") && lower.contains("price"))
+            || lower.contains("oracle")
+    });
+    let guards_price = fn_lower.iter().any(|lower| {
+        lower.contains("require_auth")
+            || lower.contains("timestamp")
+            || lower.contains("lag")
+            || lower.contains("stale")
+            || lower.contains("checked_price")
+            || lower.contains("max_age")
+    });
+    if reads_price && !guards_price && mutates_state {
+        analysis.findings.push(Finding {
+            rule: RuleId::OraclePriceFeed,
+            severity: Severity::Medium,
+            message: "price-feed/oracle read with no staleness check and no auth on the provider; \
+                      the price may be manipulable by a caller"
+                .to_string(),
+            file: rel.to_string(),
+            line: fn_start_1based,
+            remediation: "Validate the price age against a max-age threshold, verify the feed \
+                          contract address is a trusted constant, and consider a two-source or \
+                          TWAP-style oracle to resist single-feed manipulation.",
+        });
+    }
+
+    // SORSEAL-114: flash-loan / approve-and-exploit — the function grants a
+    // token allowance (`approve`/`increase_allowance`) and then performs an
+    // external call in the same function. If the allowance is caller-controlled
+    // and the external call can re-enter, value can be moved before the caller
+    // verifies it.
+    let grants_allowance = fn_lower.iter().any(|lower| {
+        lower.contains(".approve(")
+            || lower.contains(".increase_allowance(")
+            || lower.contains(".decrease_allowance(")
+    });
+    let external_call_after = fn_stripped
+        .iter()
+        .any(|line| line.contains("invoke_contract") || line.contains("call_contract"));
+    if grants_allowance && external_call_after {
+        analysis.findings.push(Finding {
+            rule: RuleId::FlashLoanApprove,
+            severity: Severity::High,
+            message: "token allowance is granted and an external call is made in the same \
+                      function; a malicious contract could use the allowance before it is checked"
+                .to_string(),
+            file: rel.to_string(),
+            line: fn_start_1based,
+            remediation:
+                "Set the allowance to zero before the external call (approve-then-set-0), \
+                          move the external call after all allowance state changes, or cap the \
+                          allowance with a `require_auth`-guarded amount.",
+        });
+    }
 }
 
 /// Run line-local rules (those that do not need function context).
+/// `lines` is the comment/string-stripped view of the source slice.
 /// `test_ranges` suppresses findings inside `#[cfg(test)]` modules and is in
 /// file coordinates (0-based line indices).
 /// `base_line` is the 0-based file index of the first line in `lines`, so
 /// reported line numbers are absolute (not relative to a function slice).
 fn run_line_rules(
-    lines: &[&str],
+    lines: &[String],
     rel: &str,
     analysis: &mut Analysis,
     test_ranges: Option<&[(usize, usize)]>,
     base_line: u32,
 ) {
-    for (i, raw) in lines.iter().enumerate() {
-        let line = strip_comments_and_strings(raw);
+    for (i, line) in lines.iter().enumerate() {
         let file_index = base_line + i as u32;
         let lineno = file_index + 1;
         let in_test = test_ranges
@@ -907,12 +1029,13 @@ pub fn render_analysis(project: &str, artifact: &str, analysis: &Analysis) -> St
     } else {
         for f in &analysis.findings {
             lines.push(format!(
-                "{}  {}  {}:{} — {}",
+                "{}  {}  {}:{} — {}  ({} confidence)",
                 f.severity.as_str(),
                 f.rule.as_str(),
                 f.file,
                 f.line,
-                f.message
+                f.message,
+                f.confidence().as_str()
             ));
         }
     }
@@ -942,11 +1065,14 @@ pub fn render_markdown(project: &str, artifact: &str, analysis: &Analysis) -> St
     }
     out.push_str(&format!("- findings: {}\n", analysis.findings.len()));
     out.push_str(&format!("- digest: `{}`\n", analysis.digest()));
-    out.push_str("\n| severity | rule | location | finding |\n|---|---|---|---|\n");
+    out.push_str(
+        "\n| severity | confidence | rule | location | finding |\n|---|---|---|---|---|\n",
+    );
     for f in &analysis.findings {
         out.push_str(&format!(
-            "| {} | `{}` | `{}:{}` | {} |\n",
+            "| {} | {} | `{}` | `{}:{}` | {} |\n",
             f.severity.as_str(),
+            f.confidence().as_str(),
             f.rule.as_str(),
             md_escape(&f.file),
             f.line,
@@ -973,7 +1099,10 @@ pub fn sarif_rules(findings: &[Finding]) -> serde_json::Value {
                 "shortDescription": { "text": meta.short_desc },
                 "fullDescription": { "text": meta.description },
                 "help": { "text": meta.fix },
-                "properties": { "tags": ["soroban", "security-audit"] }
+                "properties": {
+                    "tags": ["soroban", "security-audit"],
+                    "confidence": meta.confidence.as_str()
+                }
             }));
         }
     }
@@ -997,6 +1126,7 @@ pub fn sarif_results(findings: &[Finding]) -> serde_json::Value {
                 }],
                 "properties": {
                     "severity": f.severity.as_str(),
+                    "confidence": f.confidence().as_str(),
                     "remediation": f.remediation
                 }
             })
@@ -1021,6 +1151,8 @@ pub struct RuleMeta {
     pub rule: RuleId,
     /// Severity string (`Critical`..`Low`).
     pub severity: &'static str,
+    /// Detection certainty (independent of severity / impact).
+    pub confidence: Confidence,
     /// One-line summary shown in SARIF/terse output.
     pub short_desc: &'static str,
     /// Longer prose used by `--explain`.
@@ -1039,6 +1171,7 @@ pub fn all_rules() -> Vec<RuleMeta> {
             name: "missing-authorization",
             rule: RuleId::MissingAuth,
             severity: "Critical",
+            confidence: Confidence::High,
             short_desc: "State or value mutation without require_auth",
             description: "Detects a function that mutates contract state or moves value \
                           without calling `require_auth` (or `require_auth_for_args`) first. \
@@ -1054,6 +1187,7 @@ pub fn all_rules() -> Vec<RuleMeta> {
             name: "reentrancy",
             rule: RuleId::Reentrancy,
             severity: "High",
+            confidence: Confidence::Medium,
             short_desc: "Possible reentrancy (external call after state mutation)",
             description: "The function mutates contract state and then makes an external \
                           `invoke_contract`/`call_contract` call without authorization. If \
@@ -1068,6 +1202,7 @@ pub fn all_rules() -> Vec<RuleMeta> {
             name: "unchecked-arithmetic",
             rule: RuleId::UncheckedArithmetic,
             severity: "Medium",
+            confidence: Confidence::Medium,
             short_desc: "Unchecked arithmetic on value quantities",
             description: "Raw `+`/`-`/`*` is applied to a likely value quantity (amount, \
                           balance, i128) without a `checked_*` helper, so an overflow can \
@@ -1081,6 +1216,7 @@ pub fn all_rules() -> Vec<RuleMeta> {
             name: "panic-on-user-input",
             rule: RuleId::PanicOnInput,
             severity: "Low",
+            confidence: Confidence::High,
             short_desc: "Panic/unwrap on user-reachable code path",
             description: "`panic!` or `unwrap()`/`expect()` on a code path that callers can \
                           reach, which reverts the whole transaction instead of returning a \
@@ -1094,6 +1230,7 @@ pub fn all_rules() -> Vec<RuleMeta> {
             name: "unchecked-transfer",
             rule: RuleId::UncheckedTransfer,
             severity: "High",
+            confidence: Confidence::Medium,
             short_desc: "Value transfer without an apparent balance/auth check",
             description: "A token `.transfer`/`.transfer_from` call transfers an amount that \
                           was not derived from a prior `balance`/`allowance` read in the \
@@ -1109,6 +1246,7 @@ pub fn all_rules() -> Vec<RuleMeta> {
             name: "missing-reentrancy-guard",
             rule: RuleId::MissingReentrancyGuard,
             severity: "Medium",
+            confidence: Confidence::Medium,
             short_desc: "External call without a non_reentrant guard",
             description: "An `invoke_contract`/`call_contract` call appears without an \
                           adjacent `#[non_reentrant]` guard, so the calling function can be \
@@ -1122,6 +1260,7 @@ pub fn all_rules() -> Vec<RuleMeta> {
             name: "hardcoded-storage-key",
             rule: RuleId::HardcodedStorageKey,
             severity: "Medium",
+            confidence: Confidence::Medium,
             short_desc: "Hardcoded Symbol::new as a persistent storage key",
             description: "A `Symbol::new(\"...\")` literal is used as a persistent/instance \
                           storage key. Hardcoded keys risk collision across contract upgrades \
@@ -1135,6 +1274,7 @@ pub fn all_rules() -> Vec<RuleMeta> {
             name: "unsafe-raw-pointer",
             rule: RuleId::UnsafeRawPointer,
             severity: "Critical",
+            confidence: Confidence::High,
             short_desc: "unsafe block or raw pointer in contract code",
             description: "An `unsafe` block or raw pointer dereference was detected in contract \
                           code. Soroban contracts execute in a sandboxed environment that does \
@@ -1149,6 +1289,7 @@ pub fn all_rules() -> Vec<RuleMeta> {
             name: "panic-on-storage-read",
             rule: RuleId::PanicOnStorageRead,
             severity: "Low",
+            confidence: Confidence::High,
             short_desc: "unwrap/expect on a storage .get() call",
             description: "An `unwrap()` or `expect()` is called on the result of a \
                           `env.storage().*.get()` call. If the key does not exist, this panics \
@@ -1162,6 +1303,7 @@ pub fn all_rules() -> Vec<RuleMeta> {
             name: "admin-key-never-rotated",
             rule: RuleId::AdminKeyNeverRotated,
             severity: "Medium",
+            confidence: Confidence::Low,
             short_desc: "Admin/owner key written without rotation pattern",
             description: "A storage write to a key named OWNER/ADMIN/ADMIN_KEY is detected \
                           without a corresponding `transfer_ownership` or `set_admin` pattern \
@@ -1176,6 +1318,7 @@ pub fn all_rules() -> Vec<RuleMeta> {
             name: "missing-token-balance-check",
             rule: RuleId::MissingTokenBalanceCheck,
             severity: "High",
+            confidence: Confidence::Medium,
             short_desc: "Token operation without balance/allowance check",
             description: "A token operation (burn, mint, transfer) is performed without first \
                           verifying that the contract holds sufficient assets or has an \
@@ -1190,6 +1333,7 @@ pub fn all_rules() -> Vec<RuleMeta> {
             name: "unchecked-env-caller",
             rule: RuleId::UncheckedEnvCaller,
             severity: "Medium",
+            confidence: Confidence::Medium,
             short_desc: "Address parameter used without require_auth",
             description: "A caller-supplied Address parameter is used in a state mutation or \
                           value transfer without calling `require_auth` on it. An attacker can \
@@ -1197,6 +1341,70 @@ pub fn all_rules() -> Vec<RuleMeta> {
             example: "pub fn withdraw(env: Env, to: Address, amount: i128) {\n    token::Client::new(&env, &token).transfer(&env.current_contract_address(), &to, &amount);\n}",
             fix: "Call `to.require_auth()` before using the caller-supplied address in any \
                   state mutation or value transfer.",
+        },
+        RuleMeta {
+            id: "SORSEAL-113",
+            name: "oracle-price-feed",
+            rule: RuleId::OraclePriceFeed,
+            severity: "Medium",
+            confidence: Confidence::Low,
+            short_desc: "Price-feed/oracle read without staleness or auth guard",
+            description: "A financial decision (borrow cap, liquidation price, swap amount) is \
+                          derived from an external price read (`get_price`, `price_feed`, \
+                          `.latest_price`, oracle invoke) with no staleness check and no \
+                          `require_auth` on the provider. A caller-controllable price is the \
+                          classic single-oracle manipulation vector.",
+            example: "let price: i128 = oracle::Client::new(&env, &feed).get_price();\nlet collateral: i128 = amount * price; // no staleness check",
+            fix: "Validate the price age against a max-age threshold, verify the feed address is \
+                  a trusted constant, and consider a two-source or TWAP-style oracle to resist \
+                  single-feed manipulation.",
+        },
+        RuleMeta {
+            id: "SORSEAL-114",
+            name: "flash-loan-approve",
+            rule: RuleId::FlashLoanApprove,
+            severity: "High",
+            confidence: Confidence::Low,
+            short_desc: "Allowance granted + external call in the same function",
+            description: "The function grants a token allowance (`approve`/`increase_allowance`) \
+                          and then performs an external `invoke_contract`/`call_contract` in the \
+                          same function. If the allowance is caller-controlled and the external \
+                          call re-enters, value can be moved before the caller verifies it — the \
+                          approve-and-exploit / flash-loan shape.",
+            example: "token::Client::new(&env, &token).increase_allowance(&env.current_contract_address(), &spender, &amount);\nenv.invoke_contract::<i128>(&spender, &Symbol::new(\"take\"), (&amount,));",
+            fix: "Set the allowance to zero before the external call (approve-then-set-0), move \
+                  the external call after all allowance state changes, or cap the allowance with \
+                  a `require_auth`-guarded amount.",
+        },
+        RuleMeta {
+            id: "SORSEAL-115",
+            name: "wasm-unreachable-export",
+            rule: RuleId::WasmUnreachableExport,
+            severity: "High",
+            confidence: Confidence::High,
+            short_desc: "Exported wasm body contains an unreachable trap",
+            description: "The compiled WASM bytecode contains an exported function body with an \
+                          `unreachable` opcode (`\\0x00` before `\\0x0b` end). Callers reaching \
+                          this path revert. Source scanners cannot see this: it only appears in \
+                          the deployed artifact — exactly what `analyze --wasm` is for.",
+            example: "www 00 0b     ;; unreachable; end  inside an exported entry point",
+            fix: "Inspect the trap path: the exported entry point should return a structured \
+                  error (e.g. a Status/ErrCode) rather than an `unreachable`.",
+        },
+        RuleMeta {
+            id: "SORSEAL-116",
+            name: "wasm-no-exports",
+            rule: RuleId::WasmNoExports,
+            severity: "Medium",
+            confidence: Confidence::High,
+            short_desc: "wasm module declares zero exports",
+            description: "The compiled WASM module declares zero exports. A deployable Soroban \
+                          contract must expose at least one entry point. This usually means the \
+                          build didn't apply the `#[contractimpl]`/`wasm` export macros, or the \
+                          wrong artifact is being sealed.",
+            example: "(empty export section)",
+            fix: "Ensure `#[contractimpl]` (or the `wasm` export attributes) are present so the \
+                  build emits entry-point exports before deploying.",
         },
     ]
 }
@@ -1220,8 +1428,14 @@ pub fn rule_from_id(id: &str) -> Option<RuleMeta> {
 /// Human-readable `--explain` output for a single rule.
 pub fn render_explain(meta: &RuleMeta) -> String {
     format!(
-        "{}  {}  ({})\n\n{}\n\nExample:\n{}\n\nHow to fix:\n  {}",
-        meta.id, meta.name, meta.severity, meta.description, meta.example, meta.fix
+        "{}  {}  ({}, {} confidence)\n\n{}\n\nExample:\n{}\n\nHow to fix:\n  {}",
+        meta.id,
+        meta.name,
+        meta.severity,
+        meta.confidence.as_str(),
+        meta.description,
+        meta.example,
+        meta.fix
     )
 }
 
@@ -1230,8 +1444,12 @@ pub fn render_explain_all() -> String {
     let mut out = String::from("sorseal analyze rules\n");
     for meta in all_rules() {
         out.push_str(&format!(
-            "  {}  {}  ({})  — {}\n",
-            meta.id, meta.name, meta.severity, meta.short_desc
+            "  {}  {}  ({}, {} confidence)  — {}\n",
+            meta.id,
+            meta.name,
+            meta.severity,
+            meta.confidence.as_str(),
+            meta.short_desc
         ));
     }
     out
@@ -1253,6 +1471,7 @@ pub fn analysis_json(project: &str, artifact: &str, analysis: &Analysis) -> serd
                 "rule": f.rule.as_str(),
                 "rule_name": f.rule.name(),
                 "severity": f.severity.as_str(),
+                "confidence": f.confidence().as_str(),
                 "file": f.file,
                 "line": f.line,
                 "message": f.message,
@@ -1434,13 +1653,67 @@ mod tests {
     }
 
     #[test]
+    fn confidence_maps_by_rule_and_is_separate_from_severity() {
+        // Exact bytecode/pattern rules are High confidence; the heuristic
+        // data-flow-ish rules are Medium/Low even though their severity is high.
+        assert_eq!(
+            rule_meta(RuleId::WasmUnreachableExport).confidence,
+            Confidence::High
+        );
+        assert_eq!(
+            rule_meta(RuleId::UnsafeRawPointer).confidence,
+            Confidence::High
+        );
+        assert_eq!(
+            rule_meta(RuleId::UncheckedTransfer).confidence,
+            Confidence::Medium
+        );
+        assert_eq!(
+            rule_meta(RuleId::OraclePriceFeed).confidence,
+            Confidence::Low
+        );
+        assert_eq!(
+            rule_meta(RuleId::FlashLoanApprove).confidence,
+            Confidence::Low
+        );
+        // severity and confidence are independent axes
+        let flash = rule_meta(RuleId::FlashLoanApprove);
+        assert_eq!(flash.severity, "High");
+        assert_eq!(flash.confidence, Confidence::Low);
+    }
+
+    #[test]
+    fn confidence_flows_into_rendering_but_not_the_digest() {
+        let a = analyze_source(
+            "pub fn withdraw(env: Env, to: Address, amount: i128) {\n    \
+             env.storage().persistent().set(&KEY, &0i128);\n    \
+             env.transfer(&to, &amount);\n}",
+        );
+        let before = a.digest();
+        let rendered = render_analysis("p", "a", &a);
+        assert!(
+            rendered.contains("confidence"),
+            "console output should show a confidence tag: {rendered}"
+        );
+        // JSON carries a per-finding confidence field
+        assert_eq!(
+            analysis_json("p", "a", &a)["findings"][0]["confidence"],
+            serde_json::json!("high")
+        );
+        // the sealed digest is untouched by confidence (a rule property)
+        assert_eq!(a.digest(), before);
+    }
+
+    #[test]
     fn every_rule_has_explain_metadata() {
         let metas = all_rules();
-        assert_eq!(metas.len(), 12);
+        assert_eq!(metas.len(), 16);
         for meta in &metas {
             assert!(!render_explain(meta).is_empty(), "{} must render", meta.id);
             assert!(meta.description.contains(' '));
             assert!(!meta.fix.is_empty());
+            // confidence is always assigned
+            assert!(!meta.confidence.as_str().is_empty());
             // every RuleId variant is covered exactly once
             assert_eq!(
                 metas.iter().filter(|m| m.rule == meta.rule).count(),
@@ -1467,6 +1740,10 @@ mod tests {
             RuleId::AdminKeyNeverRotated,
             RuleId::MissingTokenBalanceCheck,
             RuleId::UncheckedEnvCaller,
+            RuleId::OraclePriceFeed,
+            RuleId::FlashLoanApprove,
+            RuleId::WasmUnreachableExport,
+            RuleId::WasmNoExports,
         ] {
             assert_eq!(all_rules().iter().filter(|m| m.rule == id).count(), 1);
         }
@@ -1698,6 +1975,76 @@ mod tests {
                 .iter()
                 .any(|f| f.rule == RuleId::AdminKeyNeverRotated),
             "expected SORSEAL-110, got {:?}",
+            a.findings
+        );
+    }
+
+    #[test]
+    fn detects_unvalidated_oracle_price_feed() {
+        let src = r#"
+            pub fn borrow(env: Env, amount: i128) {
+                let price: i128 = oracle::Client::new(&env, &feed).get_price();
+                let collateral: i128 = amount * price;
+                env.storage().persistent().set(&Symbol::new("debt"), &collateral);
+            }
+        "#;
+        let a = analyze_source(src);
+        assert!(
+            a.findings.iter().any(|f| f.rule == RuleId::OraclePriceFeed),
+            "expected SORSEAL-113, got {:?}",
+            a.findings
+        );
+    }
+
+    #[test]
+    fn no_oracle_finding_when_staleness_guarded() {
+        let src = r#"
+            pub fn borrow(env: Env, amount: i128) {
+                let (price, ts): (i128, u64) = oracle::Client::new(&env, &feed).latest_price_timestamp();
+                if env.ledger().timestamp() - ts > 300 { panic!("stale price"); }
+                let collateral: i128 = amount * price;
+                env.storage().persistent().set(&Symbol::new("debt"), &collateral);
+            }
+        "#;
+        let a = analyze_source(src);
+        assert!(
+            !a.findings.iter().any(|f| f.rule == RuleId::OraclePriceFeed),
+            "staleness-guarded price read should not fire SORSEAL-113: {:?}",
+            a.findings
+        );
+    }
+
+    #[test]
+    fn detects_approve_then_invoke_shape() {
+        let src = r#"
+            pub fn swap(env: Env, spender: Address, amount: i128) -> i128 {
+                token::Client::new(&env, &token).increase_allowance(&env.current_contract_address(), &spender, &amount);
+                env.invoke_contract::<i128>(&pool, &Symbol::new("execute"), (&amount,))
+            }
+        "#;
+        let a = analyze_source(src);
+        assert!(
+            a.findings
+                .iter()
+                .any(|f| f.rule == RuleId::FlashLoanApprove),
+            "expected SORSEAL-114, got {:?}",
+            a.findings
+        );
+    }
+
+    #[test]
+    fn no_flash_loan_finding_when_approve_only() {
+        let src = r#"
+            pub fn grant(env: Env, spender: Address, amount: i128) {
+                token::Client::new(&env, &token).approve(&env.current_contract_address(), &spender, &amount);
+            }
+        "#;
+        let a = analyze_source(src);
+        assert!(
+            !a.findings
+                .iter()
+                .any(|f| f.rule == RuleId::FlashLoanApprove),
+            "approve-only should not fire SORSEAL-114: {:?}",
             a.findings
         );
     }

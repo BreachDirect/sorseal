@@ -165,6 +165,9 @@ enum Command {
         /// Do not honor inline `// sorseal:ignore` suppressions
         #[arg(long)]
         no_ignore: bool,
+        /// Also scan the compiled .wasm binary for trap/no-export patterns
+        #[arg(long)]
+        wasm: bool,
         /// Also write the findings as a SARIF 2.1.0 report to this path
         #[arg(long)]
         sarif: Option<String>,
@@ -572,6 +575,7 @@ fn run(cli: Cli) -> anyhow::Result<u8> {
             fail_on,
             explain,
             no_ignore,
+            wasm,
             sarif,
             seal,
             ignore,
@@ -624,7 +628,48 @@ fn run(cli: Cli) -> anyhow::Result<u8> {
                     }
                 }
                 let source_abs = cwd.join(&a.source_root);
-                let analysis = analyze::analyze_tree_with(&source_abs, &ignore, &opts)?;
+                let mut analysis = analyze::analyze_tree_with(&source_abs, &ignore, &opts)?;
+                // Optionally inspect the compiled binary itself, so the sealed
+                // artifact is verified rather than only its source.
+                if wasm {
+                    let wasm_path = cwd.join(&a.wasm_path);
+                    match std::fs::read(&wasm_path) {
+                        Ok(bytes) => match sorseal::wasm_scan::scan(&bytes) {
+                            Ok(stats) => {
+                                analysis
+                                    .findings
+                                    .extend(sorseal::wasm_scan::wasm_findings(&stats));
+                            }
+                            Err(e) => {
+                                println!("WARNING  {}: {e:#}", wasm_path.display());
+                            }
+                        },
+                        Err(e) => {
+                            println!(
+                                "WARNING  cannot read {} for --wasm scan: {e}",
+                                wasm_path.display()
+                            );
+                        }
+                    }
+                }
+                // Deterministic ordering is preserved across the merged set:
+                // re-sort with the canonical file -> line -> rule order.
+                analysis.findings.sort_by(|x, y| {
+                    (
+                        x.file.as_str(),
+                        x.line,
+                        x.rule.as_str(),
+                        x.severity,
+                        x.message.as_str(),
+                    )
+                        .cmp(&(
+                            y.file.as_str(),
+                            y.line,
+                            y.rule.as_str(),
+                            y.severity,
+                            y.message.as_str(),
+                        ))
+                });
                 match format {
                     AnalyzeFormat::Console => {
                         println!(

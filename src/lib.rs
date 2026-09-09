@@ -22,4 +22,5 @@ pub mod sarif;
 pub mod scaffold;
 pub mod sign;
 pub mod sim;
+pub mod wasm_scan;
 pub mod watch;
