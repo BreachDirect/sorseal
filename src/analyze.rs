@@ -25,6 +25,12 @@ pub enum RuleId {
     PanicOnInput,
     UncheckedTransfer,
     MissingReentrancyGuard,
+    HardcodedStorageKey,
+    UnsafeRawPointer,
+    PanicOnStorageRead,
+    AdminKeyNeverRotated,
+    MissingTokenBalanceCheck,
+    UncheckedEnvCaller,
 }
 
 impl RuleId {
@@ -37,6 +43,12 @@ impl RuleId {
             RuleId::PanicOnInput => "SORSEAL-104",
             RuleId::UncheckedTransfer => "SORSEAL-105",
             RuleId::MissingReentrancyGuard => "SORSEAL-106",
+            RuleId::HardcodedStorageKey => "SORSEAL-107",
+            RuleId::UnsafeRawPointer => "SORSEAL-108",
+            RuleId::PanicOnStorageRead => "SORSEAL-109",
+            RuleId::AdminKeyNeverRotated => "SORSEAL-110",
+            RuleId::MissingTokenBalanceCheck => "SORSEAL-111",
+            RuleId::UncheckedEnvCaller => "SORSEAL-112",
         }
     }
 
@@ -48,6 +60,12 @@ impl RuleId {
             RuleId::PanicOnInput => "panic-on-user-input",
             RuleId::UncheckedTransfer => "unchecked-transfer",
             RuleId::MissingReentrancyGuard => "missing-reentrancy-guard",
+            RuleId::HardcodedStorageKey => "hardcoded-storage-key",
+            RuleId::UnsafeRawPointer => "unsafe-raw-pointer",
+            RuleId::PanicOnStorageRead => "panic-on-storage-read",
+            RuleId::AdminKeyNeverRotated => "admin-key-never-rotated",
+            RuleId::MissingTokenBalanceCheck => "missing-token-balance-check",
+            RuleId::UncheckedEnvCaller => "unchecked-env-caller",
         }
     }
 }
@@ -669,6 +687,89 @@ fn run_function_rules(fn_lines: &[&str], rel: &str, fn_start_1based: u32, analys
             remediation: "Read `env.ledger().balance(...)` (or a stored allowance) first and derive the amount from it, or add a `require_auth`-guarded allowance check before transferring.",
         });
     }
+
+    // SORSEAL-110: admin key never rotated — a function writes to a storage
+    // key named OWNER/ADMIN (via Symbol::new("OWNER")) without a
+    // remote_rotation/transfer pattern. The OWNER/ADMIN literal lives inside a
+    // string (Symbol::new), which the lexer strips, so inspect raw lines.
+    let writes_admin_key = fn_lines.iter().any(|raw| {
+        let has_set = strip_comments_and_strings(raw).contains(".set(");
+        let key_is_admin = raw.contains("Symbol::new(\"OWNER\"")
+            || raw.contains("Symbol::new(\"ADMIN\"")
+            || raw.contains("Symbol::new(\"ADMIN_KEY\"")
+            || (raw.contains("Symbol::new(\"owner\"") || raw.contains("Symbol::new(\"admin\""));
+        has_set && key_is_admin
+    });
+    let has_rotation = fn_lines.iter().any(|raw| {
+        let line = strip_comments_and_strings(raw);
+        line.contains("transfer_ownership") || line.contains("rotate") || line.contains("set_admin")
+    });
+    if writes_admin_key && !has_rotation {
+        analysis.findings.push(Finding {
+            rule: RuleId::AdminKeyNeverRotated,
+            severity: Severity::Medium,
+            message: "admin/owner key is written to storage without a rotation/transfer pattern in the same function"
+                .to_string(),
+            file: rel.to_string(),
+            line: fn_start_1based,
+            remediation: "Add a `transfer_ownership` or `set_admin` function that requires auth from the \
+                          current admin and accepts a new admin address, so the key can be rotated.",
+        });
+    }
+
+    // SORSEAL-111: missing token balance check — a function performs a token
+    // operation (burn, mint, transfer) without first verifying that the
+    // contract actually holds the asset or has an appropriate allowance.
+    let has_token_op = fn_lines.iter().any(|raw| {
+        let line = strip_comments_and_strings(raw);
+        line.contains(".burn(")
+            || line.contains(".mint(")
+            || line.contains(".transfer(")
+            || line.contains(".transfer_from(")
+    });
+    let checks_balance = fn_lines.iter().any(|raw| {
+        let lower = strip_comments_and_strings(raw).to_ascii_lowercase();
+        lower.contains("balance") || lower.contains("allowance") || lower.contains("checked_")
+    });
+    if has_token_op && !checks_balance {
+        analysis.findings.push(Finding {
+            rule: RuleId::MissingTokenBalanceCheck,
+            severity: Severity::High,
+            message: "token operation (burn/mint/transfer) without a balance or allowance check; \
+                      the contract may not hold sufficient assets"
+                .to_string(),
+            file: rel.to_string(),
+            line: fn_start_1based,
+            remediation: "Read `env.ledger().balance(...)` before performing token operations and \
+                          verify the contract holds sufficient assets, or use `checked_*` arithmetic.",
+        });
+    }
+
+    // SORSEAL-112: unchecked env caller — an Address parameter is used
+    // (passed to transfer, used as a key, etc.) without `require_auth` on
+    // that address, making it spoofable.
+    let uses_address_param = fn_lines.iter().any(|raw| {
+        let line = strip_comments_and_strings(raw);
+        line.contains("Address")
+            && (line.contains(".transfer(") || line.contains("to:") || line.contains("&to"))
+    }) && !fn_lines.iter().any(|raw| {
+        let line = strip_comments_and_strings(raw);
+        line.contains("require_auth")
+    });
+    if uses_address_param && mutates_state {
+        analysis.findings.push(Finding {
+            rule: RuleId::UncheckedEnvCaller,
+            severity: Severity::Medium,
+            message:
+                "caller/address parameter used without `require_auth`; the address may be spoofable"
+                    .to_string(),
+            file: rel.to_string(),
+            line: fn_start_1based,
+            remediation:
+                "Call `address.require_auth()` before using the caller-supplied address in \
+                          any state mutation or value transfer.",
+        });
+    }
 }
 
 /// Run line-local rules (those that do not need function context).
@@ -711,6 +812,75 @@ fn run_line_rules(
                 file: rel.to_string(),
                 line: lineno,
                 remediation: "Consider guarding the calling function with `#[non_reentrant]` to prevent reentrant entry.",
+            });
+        }
+
+        // SORSEAL-107: hardcoded storage key — Symbol::new("...") used as a
+        // persistent/instance storage key. Hardcoded keys risk collision across
+        // contract upgrades or with third-party contracts sharing the same
+        // storage namespace.
+        if line.contains("Symbol::new(")
+            && (line.contains("storage()")
+                || line.contains("persistent()")
+                || line.contains("instance()"))
+        {
+            analysis.findings.push(Finding {
+                rule: RuleId::HardcodedStorageKey,
+                severity: Severity::Medium,
+                message: "hardcoded `Symbol::new(\"...\")` used as a persistent storage key; \
+                          consider using a namespaced constant or derive the key from the contract address"
+                    .to_string(),
+                file: rel.to_string(),
+                line: lineno,
+                remediation: "Define storage keys as `const` symbols with a unique namespace prefix, \
+                              or use a hash-based key to avoid collisions across upgrades.",
+            });
+        }
+
+        // SORSEAL-108: unsafe raw pointer — `unsafe` blocks or raw pointer
+        // derefs in Soroban contract code. Soroban's sandboxed execution
+        // model does not support unsafe; these blocks are either dead code
+        // or indicate a fundamental misuse of the SDK.
+        if line.contains("unsafe {")
+            || line.contains("unsafe{")
+            || line.contains("*const ")
+            || line.contains("*mut ")
+            || line.contains("as *const")
+            || line.contains("as *mut")
+        {
+            analysis.findings.push(Finding {
+                rule: RuleId::UnsafeRawPointer,
+                severity: Severity::Critical,
+                message: "`unsafe` block or raw pointer operation detected in contract code; \
+                          Soroban contracts execute in a sandbox and unsafe is not supported"
+                    .to_string(),
+                file: rel.to_string(),
+                line: lineno,
+                remediation:
+                    "Remove the `unsafe` block. Soroban contracts cannot use unsafe code — \
+                              the runtime sandbox enforces memory safety. If you need FFI, use the \
+                              Soroban SDK's safe abstractions.",
+            });
+        }
+
+        // SORSEAL-109: panic on storage read — `.unwrap()` on a storage get
+        // call. If the key does not exist, this panics and reverts the
+        // transaction. Prefer `unwrap_or`/`unwrap_or_default` or `Option` checks.
+        if line.contains(".get(")
+            && line.contains("storage()")
+            && (line.contains("unwrap()") || line.contains("expect("))
+        {
+            analysis.findings.push(Finding {
+                rule: RuleId::PanicOnStorageRead,
+                severity: Severity::Low,
+                message:
+                    "`unwrap()`/`expect()` on a storage `.get()` call; panics if the key is absent"
+                        .to_string(),
+                file: rel.to_string(),
+                line: lineno,
+                remediation:
+                    "Use `.unwrap_or(default)` or `.get(...).map(...)` to handle missing keys \
+                              gracefully instead of panicking.",
             });
         }
     }
@@ -947,6 +1117,87 @@ pub fn all_rules() -> Vec<RuleMeta> {
             fix: "Consider guarding the calling function with `#[non_reentrant]` to prevent \
                   reentrant entry.",
         },
+        RuleMeta {
+            id: "SORSEAL-107",
+            name: "hardcoded-storage-key",
+            rule: RuleId::HardcodedStorageKey,
+            severity: "Medium",
+            short_desc: "Hardcoded Symbol::new as a persistent storage key",
+            description: "A `Symbol::new(\"...\")` literal is used as a persistent/instance \
+                          storage key. Hardcoded keys risk collision across contract upgrades \
+                          or with third-party contracts sharing the same storage namespace.",
+            example: "env.storage().persistent().set(&Symbol::new(\"balance\"), &amount);",
+            fix: "Define storage keys as `const` symbols with a unique namespace prefix, or \
+                  use a hash-based key to avoid collisions.",
+        },
+        RuleMeta {
+            id: "SORSEAL-108",
+            name: "unsafe-raw-pointer",
+            rule: RuleId::UnsafeRawPointer,
+            severity: "Critical",
+            short_desc: "unsafe block or raw pointer in contract code",
+            description: "An `unsafe` block or raw pointer dereference was detected in contract \
+                          code. Soroban contracts execute in a sandboxed environment that does \
+                          not support unsafe; these blocks are either dead code or indicate a \
+                          fundamental misuse of the SDK.",
+            example: "unsafe { (*ptr).write(value); }",
+            fix: "Remove the `unsafe` block. Soroban contracts cannot use unsafe code — the \
+                  runtime sandbox enforces memory safety. Use the SDK's safe abstractions.",
+        },
+        RuleMeta {
+            id: "SORSEAL-109",
+            name: "panic-on-storage-read",
+            rule: RuleId::PanicOnStorageRead,
+            severity: "Low",
+            short_desc: "unwrap/expect on a storage .get() call",
+            description: "An `unwrap()` or `expect()` is called on the result of a \
+                          `env.storage().*.get()` call. If the key does not exist, this panics \
+                          and reverts the entire transaction.",
+            example: "let val: i128 = env.storage().persistent().get(&KEY).unwrap();",
+            fix: "Use `.unwrap_or(default)` or `.get(...).map(...)` to handle missing keys \
+                  gracefully instead of panicking.",
+        },
+        RuleMeta {
+            id: "SORSEAL-110",
+            name: "admin-key-never-rotated",
+            rule: RuleId::AdminKeyNeverRotated,
+            severity: "Medium",
+            short_desc: "Admin/owner key written without rotation pattern",
+            description: "A storage write to a key named OWNER/ADMIN/ADMIN_KEY is detected \
+                          without a corresponding `transfer_ownership` or `set_admin` pattern \
+                          in the same function. A non-rotatable admin key means a compromised \
+                          key cannot be replaced.",
+            example: "env.storage().persistent().set(&OWNER, &admin);",
+            fix: "Add a `transfer_ownership` function that requires auth from the current admin \
+                  and accepts a new admin address.",
+        },
+        RuleMeta {
+            id: "SORSEAL-111",
+            name: "missing-token-balance-check",
+            rule: RuleId::MissingTokenBalanceCheck,
+            severity: "High",
+            short_desc: "Token operation without balance/allowance check",
+            description: "A token operation (burn, mint, transfer) is performed without first \
+                          verifying that the contract holds sufficient assets or has an \
+                          appropriate allowance. The contract may attempt to transfer more \
+                          than it holds.",
+            example: "token::Client::new(&env, &token).burn(&env.current_contract_address(), &amount);",
+            fix: "Read `env.ledger().balance(...)` before performing token operations and verify \
+                  the contract holds sufficient assets.",
+        },
+        RuleMeta {
+            id: "SORSEAL-112",
+            name: "unchecked-env-caller",
+            rule: RuleId::UncheckedEnvCaller,
+            severity: "Medium",
+            short_desc: "Address parameter used without require_auth",
+            description: "A caller-supplied Address parameter is used in a state mutation or \
+                          value transfer without calling `require_auth` on it. An attacker can \
+                          supply any address, spoofing the caller.",
+            example: "pub fn withdraw(env: Env, to: Address, amount: i128) {\n    token::Client::new(&env, &token).transfer(&env.current_contract_address(), &to, &amount);\n}",
+            fix: "Call `to.require_auth()` before using the caller-supplied address in any \
+                  state mutation or value transfer.",
+        },
     ]
 }
 
@@ -985,10 +1236,6 @@ pub fn render_explain_all() -> String {
     }
     out
 }
-
-// ---------------------------------------------------------------------------
-// JSON rendering
-// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // JSON rendering
@@ -1189,7 +1436,7 @@ mod tests {
     #[test]
     fn every_rule_has_explain_metadata() {
         let metas = all_rules();
-        assert_eq!(metas.len(), 6);
+        assert_eq!(metas.len(), 12);
         for meta in &metas {
             assert!(!render_explain(meta).is_empty(), "{} must render", meta.id);
             assert!(meta.description.contains(' '));
@@ -1214,6 +1461,12 @@ mod tests {
             RuleId::PanicOnInput,
             RuleId::UncheckedTransfer,
             RuleId::MissingReentrancyGuard,
+            RuleId::HardcodedStorageKey,
+            RuleId::UnsafeRawPointer,
+            RuleId::PanicOnStorageRead,
+            RuleId::AdminKeyNeverRotated,
+            RuleId::MissingTokenBalanceCheck,
+            RuleId::UncheckedEnvCaller,
         ] {
             assert_eq!(all_rules().iter().filter(|m| m.rule == id).count(), 1);
         }
@@ -1357,6 +1610,94 @@ mod tests {
                 .iter()
                 .any(|f| f.rule == RuleId::UncheckedTransfer),
             "balance-checked transfer should not fire SORSEAL-105: {:?}",
+            a.findings
+        );
+    }
+
+    #[test]
+    fn detects_hardcoded_storage_key() {
+        let src = r#"
+            pub fn set_balance(env: Env, amount: i128) {
+                env.storage().persistent().set(&Symbol::new("balance"), &amount);
+            }
+        "#;
+        let a = analyze_source(src);
+        assert!(
+            a.findings
+                .iter()
+                .any(|f| f.rule == RuleId::HardcodedStorageKey),
+            "expected SORSEAL-107, got {:?}",
+            a.findings
+        );
+    }
+
+    #[test]
+    fn detects_unsafe_raw_pointer() {
+        let src = r#"
+            pub fn init(env: Env) {
+                unsafe { *ptr = 42; }
+            }
+        "#;
+        let a = analyze_source(src);
+        assert!(
+            a.findings
+                .iter()
+                .any(|f| f.rule == RuleId::UnsafeRawPointer),
+            "expected SORSEAL-108, got {:?}",
+            a.findings
+        );
+    }
+
+    #[test]
+    fn detects_panic_on_storage_read() {
+        let src = r#"
+            pub fn get_balance(env: Env) -> i128 {
+                let balance: i128 = env.storage().persistent().get(&Symbol::new("balance")).unwrap();
+                balance
+            }
+        "#;
+        let a = analyze_source(src);
+        assert!(
+            a.findings
+                .iter()
+                .any(|f| f.rule == RuleId::PanicOnStorageRead),
+            "expected SORSEAL-109, got {:?}",
+            a.findings
+        );
+    }
+
+    #[test]
+    fn detects_missing_token_balance_check() {
+        let src = r#"
+            pub fn sweep(env: Env, to: Address) {
+                let amount = 1_000_000;
+                token::Client::new(&env, &to).transfer(&env.current_contract_address(), &to, &amount);
+            }
+        "#;
+        let a = analyze_source(src);
+        assert!(
+            a.findings
+                .iter()
+                .any(|f| f.rule == RuleId::MissingTokenBalanceCheck),
+            "expected SORSEAL-111, got {:?}",
+            a.findings
+        );
+    }
+
+    #[test]
+    fn admin_key_without_rotation_is_flagged() {
+        let src = r#"
+            pub fn init_admin(env: Env, admin: Address) {
+                admin.require_auth();
+                env.storage().persistent().set(&Symbol::new("OWNER"), &admin);
+            }
+        "#;
+        let a = analyze_source(src);
+        assert!(
+            a.findings
+                .iter()
+                .any(|f| f.rule == RuleId::AdminKeyNeverRotated),
+            "expected SORSEAL-110, got {:?}",
             a.findings
         );
     }
