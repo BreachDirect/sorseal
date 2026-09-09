@@ -1,106 +1,66 @@
-# sorseal
+<p align="center">
+  <strong>Sorseal — the provenance layer for Soroban</strong><br/>
+  <em>Prove your smart contract wasn't swapped after deployment — and catch the bugs that drain contracts before you ship.</em>
+</p>
 
-**Provenance + vulnerability scanning for Soroban/WASM artifacts** — prove deployed bytecode matches source, and scan contract source for security patterns before you ship.
+<p align="center">
+  <a href="https://github.com/BreachDirect/sorseal/actions/workflows/ci.yml"><img src="https://github.com/BreachDirect/sorseal/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/BreachDirect/sorseal/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
+  <img src="https://img.shields.io/badge/rust-1.85+-orange.svg" alt="MSRV 1.85">
+  <a href="https://github.com/BreachDirect/sorseal/actions/workflows/security.yml"><img src="https://github.com/BreachDirect/sorseal/actions/workflows/security.yml/badge.svg" alt="Security audit"></a>
+  <a href="https://github.com/BreachDirect/sorseal/blob/main/WAVE_EVIDENCE_ToryMic.md"><img src="https://img.shields.io/badge/stellar-wave_9-6B3FA0.svg" alt="Wave 9"></a>
+</p>
 
-sorseal seals the build: it records SHA-256 digests for your contract artifacts (WASM + source tree + toolchain + git commit), then verifies at any time that a clean rebuild reproduces those exact digests. On top of that provenance base it statically scans contract source for known-fragile Soroban patterns (`sorseal analyze`), seals the finding digests into the audit trail, and can monitor files for unauthorized changes, alerting when drift is detected.
+---
+
+## The problem
+
+Every Soroban deployment is a trust assumption. Was the WASM on-chain built from the source you reviewed? Was it modified before deploy? Did someone sneak in a function that drains the treasury?
+
+**Sorseal answers these questions.** It seals your build with cryptographic proof, scans your source for the patterns that let contracts get drained, and lets anyone verify the chain from source to deployment — all from the CLI.
 
 ## Install
 
 ```bash
+# prebuilt binary (fastest)
+curl -sSfL https://github.com/BreachDirect/sorseal/releases/latest/download/sorseal-linux-amd64 -o /usr/local/bin/sorseal && chmod +x /usr/local/bin/sorseal
+
+# or via crates.io
 cargo install sorseal --locked
-```
 
-Or build from source:
-
-```bash
-git clone https://github.com/BreachDirect/sorseal.git
-cd sorseal
-cargo build --release
+# or from source
+git clone https://github.com/BreachDirect/sorseal.git && cd sorseal && cargo build --release
 ```
 
 **Requirements:** Rust 1.85+ and `wasm32-unknown-unknown` target (`rustup target add wasm32-unknown-unknown`).
 
-## Quick start
+## See it in action
 
-### Contract provenance
+```
+$ sorseal analyze
 
-```bash
-# scaffold a manifest
-sorseal init
+Critical  SORSEAL-101  src/lib.rs:23 — function mutates state without require_auth
+High      SORSEAL-102  src/lib.rs:32 — reentrancy: state mutation + external call, no guard
+High      SORSEAL-105  src/lib.rs:42 — transfer amount not derived from balance read
 
-# seal (record digests)
-sorseal record
-
-# verify (rebuild + compare)
-sorseal verify
+3 findings — Critical: 1 · High: 2 · Medium: 0 · Low: 0
 ```
 
-### File integrity monitoring
-
-```bash
-# generate a starter config
-sorseal watch --init
-
-# run a single check (for cron)
-sorseal watch --once
-
-# run as a daemon
-sorseal watch
 ```
-
-## Commands
-
-| Command | Description |
-|---|---|
-| `sorseal init` | Scaffold a `sorseal.toml` manifest for your project |
-| `sorseal record` | Build artifacts and write `sorseal.provenance.json` |
-| `sorseal verify` | Rebuild and verify artifacts match the sealed provenance |
-| `sorseal report` | Render provenance as console, JSON, or Markdown |
-| `sorseal keygen` | Generate an Ed25519 keypair for signing attestations |
-| `sorseal sign` | Sign the provenance as an in-toto/SLSA v1.0 attestation |
-| `sorseal verify-attestation` | Verify a signed attestation against a public key |
-| `sorseal onchain-verify` | Compare on-chain WASM hash against sealed provenance |
-| `sorseal onchain-audit` | Audit a contract's full on-chain upgrade history |
-| `sorseal simulate-onchain` | Fund-free, offline on-chain verify + audit demo |
-| `sorseal analyze` | Statically scan contract source for Soroban vulnerability patterns |
-| `sorseal watch` | Monitor files for integrity drift and alert on changes |
-
-## Features
-
-### Contract provenance
-
-Seal your Soroban contract builds with cryptographic proof that the deployed bytecode matches your source code.
-
-```bash
-$ sorseal record
-Sorseal — my-contract
-
-sealed  my-contract :: wasm  sha256 a1b2c3d4e5f6... (24576 bytes)
-sealed  my-contract :: source sha256 f6e5d4c3b2a1...
-
-toolchain rustc 1.85.0 · git commit 8a3f2b1c (clean)
-
-provenance written to sorseal.provenance.json
-```
-
-```bash
 $ sorseal verify
-Sorseal — my-contract verify
 
-PASSED  my-contract :: wasm — sha256 matches sealed digest
-PASSED  my-contract :: source — sha256 matches sealed digest
-PASSED  my-contract :: command — build_command unchanged
+PASSED  my-contract :: wasm     — sha256 matches sealed digest
+PASSED  my-contract :: source   — sha256 matches sealed digest
+PASSED  my-contract :: command  — build_command unchanged
 
 3 checks: 3 passed, 0 failed, 0 errored
 ```
 
-### SARIF output for CI
+> **Try it now:** `cd examples/vulnerable-contract && sorseal analyze`
 
-```bash
-sorseal verify --sarif results.sarif
-```
+## Add one line to your CI
 
-Upload to GitHub Code Scanning with the [sorseal GitHub Action](action.yml):
+Every pull request gets scanned automatically. Upload results to GitHub Code Scanning:
 
 ```yaml
 - uses: BreachDirect/sorseal@main
@@ -108,188 +68,94 @@ Upload to GitHub Code Scanning with the [sorseal GitHub Action](action.yml):
     sarif-file: sorseal.sarif
 ```
 
-### Static vulnerability analysis
+Or gate on severity — fail the build if any Critical/High finding exists:
 
-`sorseal analyze` statically scans a contract's Rust source for known-fragile
-Soroban patterns — the same ones that let value-holding contracts get drained —
-and reports them with a severity and remediation, so findings can be triaged
-and fed straight into CI or an audit report.
-
-```bash
-$ sorseal analyze
-Sorseal — vulnerable-contract analyze :: vulnerable-contract
-
-Critical  SORSEAL-101  src/lib.rs:23 — function mutates contract state or moves value without `require_auth`; an unauthenticated caller may drive changes
-Medium    SORSEAL-103  src/lib.rs:25 — unchecked arithmetic on a likely value quantity; consider `checked_add/sub/mul` to guard against overflow
-Critical  SORSEAL-101  src/lib.rs:32 — function mutates contract state or moves value without `require_auth`; an unauthenticated caller may drive changes
-High      SORSEAL-102  src/lib.rs:32 — possible reentrancy: the function mutates state and makes an external/invoke call without `require_auth`
-Medium    SORSEAL-103  src/lib.rs:32 — unchecked arithmetic on a likely value quantity; consider `checked_add/sub/mul` to guard against overflow
-Medium    SORSEAL-103  src/lib.rs:35 — unchecked arithmetic on a likely value quantity; consider `checked_add/sub/mul` to guard against overflow
-Medium    SORSEAL-106  src/lib.rs:37 — external `invoke_contract`/`call_contract` call detected without an adjacent `non_reentrant` guard
-Critical  SORSEAL-101  src/lib.rs:42 — function mutates contract state or moves value without `require_auth`; an unauthenticated caller may drive changes
-High      SORSEAL-105  src/lib.rs:42 — token `.transfer`/`.transfer_from` call with no prior balance/allowance read; the transferred amount is not derived from what this contract actually holds
-Critical  SORSEAL-101  src/lib.rs:49 — function mutates contract state or moves value without `require_auth`; an unauthenticated caller may drive changes
-Medium    SORSEAL-103  src/lib.rs:49 — unchecked arithmetic on a likely value quantity; consider `checked_add/sub/mul` to guard against overflow
-Medium    SORSEAL-103  src/lib.rs:55 — unchecked arithmetic on a likely value quantity; consider `checked_add/sub/mul` to guard against overflow
-Low       SORSEAL-104  src/lib.rs:59 — `panic!` or `unwrap()` on a code path that may be reachable from callers; prefer returning a Result and reverting with a clear error
-
-13 findings — Critical: 4 · High: 2 · Medium: 6 · Low: 1
-analysis digest sha256 b911e3584977
+```yaml
+- uses: BreachDirect/sorseal@main
 ```
 
-Detection rules (each with a stable id, severity, and remediation):
-
-| Rule | Severity | Detects |
-|---|---|---|
-| `SORSEAL-101` missing-authorization | Critical | State/value mutation without `require_auth` |
-| `SORSEAL-102` reentrancy | High | External call after state mutation, no guard |
-| `SORSEAL-103` unchecked-arithmetic | Medium | Raw `+`/`-`/`*` on amounts instead of `checked_*` |
-| `SORSEAL-104` panic-on-input | Low | `panic!`/`unwrap()` on a caller-reachable value path |
-| `SORSEAL-105` unchecked-transfer | High | `.transfer`/`.transfer_from` amount not derived from a prior balance/allowance read |
-| `SORSEAL-106` missing-reentrancy-guard | Medium | `invoke_contract`/`call_contract` without `non_reentrant` |
-
-Output as JSON, Markdown (audit deliverable), or SARIF (code scanning):
-
-```bash
-sorseal analyze --format json        # machine-readable findings + digest
-sorseal analyze --format markdown > audit.md
-sorseal analyze --sarif findings.sarif
+Then add a step:
+```yaml
+- run: sorseal analyze --fail-on High
 ```
 
-Run `sorseal analyze` as a CI gate with a severity threshold — the process
-exits non-zero when findings at or above the threshold exist:
+## Quick start
+
+### Contract provenance
 
 ```bash
-sorseal analyze --fail-on High       # gate the build on no High/Critical findings
+sorseal init              # scaffold a sorseal.toml manifest
+sorseal record            # seal: build + hash + write provenance
+sorseal verify            # rebuild and compare digests
 ```
 
-Neither `--fail-on` nor any other flag needs to be set for ordinary use:
-without a gate, `analyze` is report-only and exits 0 even with findings.
-
-Explain a rule without scanning, and build suppressions for reviewed/acceptable
-findings:
+### Vulnerability scan
 
 ```bash
-sorseal analyze --explain SORSEAL-105   # guidance + fix for one rule
-sorseal analyze --explain               # list every rule
-```
-
-```rust
-// sorseal:ignore SORSEAL-104 reviewed: this input is validated by the caller
-let rate: i128 = env.storage().instance().get(&KEY).unwrap();
-```
-
-Findings tagged with `// sorseal:ignore <RULE>` on the line above are dropped
-(counts, SARIF, and the sealed digest all exclude them); add `--no-ignore` to
-temporarily see everything. Because suppressions change the finding set, a
-suppressed run seals a different digest than an unsuppressed one.
-
-And because the audit itself must be tamper-evident, the finding digest can be
-sealed into the provenance record alongside the wasm + source digests:
-
-```bash
-sorseal analyze --seal
-```
-
-`--seal` appends `analysis` entries (finding count, worst severity, SHA-256 of
-the stable finding serialization, and timestamp) to `sorseal.provenance.json`,
-so `sorseal verify` proves the audited source was not altered since the
-analysis was produced.
-
-Try it on the bundled intentionally-vulnerable example contract:
-
-```bash
-cd examples/vulnerable-contract
-sorseal analyze
-```
-
-### Signed attestations
-
-```bash
-sorseal keygen
-sorseal sign --key sorseal.key
-sorseal verify-attestation --public-key sorseal.pub
-```
-
-Produces Ed25519-signed in-toto Statements (SLSA v1.0 predicate, DSSE envelope) so releases can be authenticated by public key alone.
-
-### On-chain verification
-
-Check that a deployed contract's on-chain WASM hash matches your sealed provenance:
-
-```bash
-sorseal onchain-verify --contract-id CABC123...
-```
-
-Audit the full upgrade lineage of a contract:
-
-```bash
-sorseal onchain-audit --contract-id CABC123...
-```
-
-### On-chain demo without funds
-
-A live deploy/upgrade demo needs a funded account to pay transaction fees.
-`sorseal simulate-onchain` drives the **same** on-chain code paths (the
-`getLedgerEntries` XDR decode, `getEvents` paging, upgrade-lineage
-reconstruction, and provenance cross-checking) against an in-memory ledger
-derived from your provenance — so the whole seal → deploy → upgrade → verify →
-audit story is reproducible on any machine with **zero funds and no network**:
-
-```bash
-./scripts/sim-demo.sh
-```
-
-The first case is a fully-sealed contract (verify **PASSED**, audit **PASSED**,
-every version in the lineage attested). The second injects an unsealed current
-deployment and shows the tool catching the drift (verify **FAILED**, audit
-**FAILED** with `current ... NONE`). Run just one case yourself:
-
-```bash
-# clean: current deployment is sealed
-sorseal simulate-onchain
-
-# drift: simulate an unsealed current deployment
-sorseal simulate-onchain --deploy-wasm 9999999999999999999999999999999999999999999999999999999999999999
+sorseal analyze                     # scan all artifacts
+sorseal analyze --fail-on High      # CI gate: exit non-zero on High/Critical
+sorseal analyze --format json       # machine-readable findings
+sorseal analyze --sarif out.sarif   # SARIF for code scanning
+sorseal analyze --explain           # list all rules
+sorseal analyze --seal              # seal finding digest into provenance
 ```
 
 ### File integrity monitoring
 
-Monitor critical files for unauthorized changes:
-
 ```bash
-$ sorseal watch --once
-Sorseal — file integrity watch
-
-PASSED  /etc/nginx/nginx.conf — unchanged
-FAILED  /usr/bin/sshd — sha256 mismatch: baseline abc123, current def456
-PASSED  /etc/passwd — unchanged
-
-3 files checked: 2 passed, 1 failed
+sorseal watch --init    # generate starter config
+sorseal watch --once    # single check (for cron)
+sorseal watch           # daemon mode with webhook alerts
 ```
 
-Configure with `sorseal.watch.toml`:
+## All commands
 
-```toml
-[watch]
-interval_secs = 300
+| Command | What it does |
+|---|---|
+| `sorseal init` | Scaffold a `sorseal.toml` manifest |
+| `sorseal record` | Build artifacts, write `sorseal.provenance.json` |
+| `sorseal verify` | Rebuild and verify artifacts match sealed provenance |
+| `sorseal report` | Render provenance as console, JSON, or Markdown |
+| `sorseal keygen` | Generate an Ed25519 keypair for signing |
+| `sorseal sign` | Sign provenance as an in-toto/SLSA v1.0 attestation |
+| `sorseal verify-attestation` | Verify a signed attestation |
+| `sorseal onchain-verify` | Compare on-chain WASM hash against sealed provenance |
+| `sorseal onchain-audit` | Audit a contract's full upgrade history |
+| `sorseal simulate-onchain` | Fund-free offline on-chain verify + audit demo |
+| `sorseal analyze` | Scan source for Soroban vulnerability patterns |
+| `sorseal watch` | Monitor files for integrity drift, alert on changes |
 
-[[watch.paths]]
-path = "/etc/nginx/nginx.conf"
-label = "nginx-config"
+## Detection rules
 
-[[watch.paths]]
-path = "/usr/bin/sshd"
-label = "sshd-binary"
+`sorseal analyze` checks for the patterns that let Soroban contracts get drained, reentered, or crashed. Each rule has a stable id, severity, and remediation:
 
-[[watch.webhooks]]
-type = "discord"
-url = "https://discord.com/api/webhooks/..."
+| Rule | Name | Severity | What it catches |
+|---|---|---|---|
+| `SORSEAL-101` | missing-authorization | Critical | State/value mutation without `require_auth` |
+| `SORSEAL-102` | reentrancy | High | External call after state mutation, no guard |
+| `SORSEAL-103` | unchecked-arithmetic | Medium | Raw `+`/`-`/`*` on amounts instead of `checked_*` |
+| `SORSEAL-104` | panic-on-user-input | Low | `panic!`/`unwrap()` on a caller-reachable path |
+| `SORSEAL-105` | unchecked-transfer | High | `.transfer` amount not derived from balance read |
+| `SORSEAL-106` | missing-reentrancy-guard | Medium | `invoke_contract` without `non_reentrant` |
+| `SORSEAL-107` | hardcoded-storage-key | Medium | Hardcoded `Symbol::new()` as persistent storage key — collisions across upgrades |
+| `SORSEAL-108` | unsafe-raw-pointer | Critical | `unsafe` block or raw pointer deref in contract code |
+| `SORSEAL-109` | panic-on-storage-read | Low | `unwrap()` on `env.storage()` read — panics if key missing |
+| `SORSEAL-110` | admin-key-never-rotated | Medium | `OWNER`/`ADMIN` storage write without rotation pattern |
+| `SORSEAL-111` | missing-token-balance-check | High | Token operation without verifying contract holds the asset |
+| `SORSEAL-112` | unchecked-env-caller | Medium | Caller address used without `require_auth` — spoofable |
 
-[[watch.webhooks]]
-type = "telegram"
-token = "your-bot-token"
-chat_id = "123456"
+Run `sorseal analyze --explain SORSEAL-107` for detailed guidance on any rule.
+
+## Architecture at a glance
+
+```
+sorseal init         ──→  sorseal.toml (manifest)
+sorseal record       ──→  build → hash (WASM + source + toolchain + git) → sorseal.provenance.json
+sorseal verify       ──→  rebuild → compare digests → PASSED/FAILED
+sorseal analyze      ──→  lexical scan → findings (JSON/console/SARIF/Markdown)
+sorseal sign         ──→  Ed25519 DSSE envelope (in-toto/SLSA v1.0)
+sorseal onchain-*    ──→  getLedgerEntries/getEvents XDR → verify against provenance
+sorseal watch        ──→  hash baseline → drift detection → Discord/Telegram/POST alert
 ```
 
 ## Ecosystem work & Wave evidence
@@ -301,59 +167,32 @@ This repository is part of a broader set of contributions to the Stellar / Sorob
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the full contributor guide (setup,
-code style, PR process, testing requirements).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, code style, and PR process.
 
 ### Getting involved in Wave 9
 
-This repository is a **Stellar Drips Wave 9** project. The quickest ways to
-contribute right now, in rough order of leverage for the repo *and* for Wave 9
-contribution credit:
+This repository is a **Stellar Drips Wave 9** project. The quickest ways to contribute right now:
 
-1. **Pick up a `good-first-issue`** — issues labelled
-   `good-first-issue` are scoped, reviewable, and small enough to land in a
-   weekend. Say you're taking one in the thread, then reference the issue + the
-   Wave in your PR so it can be attributed and rewarded.
-2. **Run `sorseal analyze` on your own Soroban contract** and file a bug/feature
-   report with real output. Every genuine finding (or rule gap) you surface
-   improves the analyzer and earns an issue + PR of its own.
-3. **Add a detection rule** — the rule table below lists what `analyze` covers
-   today. New Soroban issue classes (unchecked balance, missing auth branches,
-   oracle/price reads, storage-key collisions) make great intermediate issues.
-4. **Document** — rule-explanation pages, worked examples, tips for integrating
-   `analyze --fail-on` into GitHub Actions, and real testnet walkthroughs are
-   high-value, low-risk contributions.
-5. **Post captured evidence** — run `scripts/sim-demo.sh` and `sorseal analyze`
-   against the `examples/vulnerable-contract`, then attach the console + SARIF
-   + proven JSON output to PRs and to `WAVE_EVIDENCE_ToryMic.md`. PRs that show
-   the tool actually catching a bug or proving a deployment are the strongest
-   Wave evidence. (No funded testnet account is required — see the
-   `simulate-onchain` demo above.)
-
-> **Tip for contributors:** commits and PRs with real captured CLI output
-> (console + SARIF + proven JSON) are far stronger Wave evidence than code-only
-> changes — show the tool actually finding (or verifying) things.
+1. **Pick up a `good-first-issue`** — issues labelled `good-first-issue` are scoped and small enough to land in a weekend.
+2. **Run `sorseal analyze` on your own contract** and file a bug/feature report with real output.
+3. **Add a detection rule** — new Soroban issue classes (storage-key collisions, oracle manipulation, missing balance checks) make great intermediate issues.
+4. **Document** — rule-explanation pages, worked examples, and real testnet walkthroughs.
+5. **Post captured evidence** — run `scripts/sim-demo.sh` and attach output to PRs. Real output is stronger Wave evidence than code-only changes.
 
 ### Project roadmap
 
-Current shipped & in-flight capabilities:
-
-| Area | Command | Status |
-|---|---|---|
-| Build provenance | `record` / `verify` | shipped |
-| Reporting | `report` (console/JSON/Markdown) | shipped |
-| CI / SARIF | `verify --sarif` + GitHub Action | shipped |
-| Signed attestations | `keygen` / `sign` / `verify-attestation` | shipped |
-| On-chain verification | `onchain-verify` | shipped |
-| Upgrade-lineage audit | `onchain-audit` | shipped |
-| On-chain demo (no funds) | `simulate-onchain` | shipped |
-| File integrity watch | `watch` | shipped |
-| Vulnerability scan | `analyze` (6 rules, `--seal`) | shipped |
-| Vulnerability CI gate | `analyze --fail-on <severity>` | shipped |
-| JSON findings output | `analyze --format json` | shipped |
-| Self-documenting rules | `analyze --explain [RULE]` | shipped |
-| Finding suppressions | `analyze` inline `// sorseal:ignore` | shipped |
-| Golden-file digest tests | `tests/analyze_golden.rs` | shipped |
+| Area | Status |
+|---|---|
+| Build provenance (`record`/`verify`) | shipped |
+| Reporting (console/JSON/Markdown) | shipped |
+| CI / SARIF + GitHub Action | shipped |
+| Signed attestations (SLSA v1.0) | shipped |
+| On-chain verification + upgrade audit | shipped |
+| Vulnerability scan (12 rules, `--seal`) | shipped |
+| CI severity gate (`--fail-on`) | shipped |
+| File integrity monitoring | shipped |
+| Prebuilt binary releases | shipped |
+| Additional detection rules | in progress |
 
 ## License
 
