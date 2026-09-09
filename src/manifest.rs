@@ -186,8 +186,13 @@ mod tests {
 
     #[test]
     fn rejects_absolute_wasm_path() {
+        // Build a genuinely absolute path for the current platform — a
+        // hardcoded "/etc/passwd" is only absolute on Unix, so this test
+        // previously failed on Windows.
         let mut a = valid_artifact("a");
-        a.wasm_path = PathBuf::from("/etc/passwd");
+        a.wasm_path = std::env::current_dir()
+            .expect("current dir is available in tests")
+            .join("etc/passwd");
         let m = Manifest {
             project: Project { name: "x".into() },
             artifacts: vec![a],

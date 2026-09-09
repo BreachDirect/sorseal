@@ -35,8 +35,11 @@ inputs:
     default: 'verify'
   sarif-file:
     description: >-
-      Path to write the SARIF report (relative to `working-directory`). When
-      set, the action uploads it to GitHub code scanning automatically.
+      Path to write the SARIF report (relative to `working-directory`). In
+      `both` mode the report is split into `<path>.verify.sarif` and
+      `<path>.analyze.sarif`; otherwise the exact path is used. When set, the
+      action uploads any produced `*.sarif` files to GitHub code scanning
+      automatically.
     required: false
     default: ''
   fail-on:
@@ -101,7 +104,11 @@ runs:
         run_verify() {
           local args=(--manifest "${{ inputs.manifest }}" --provenance "${{ inputs.provenance }}")
           if [ -n "$sarif" ]; then
-            args+=(--sarif "${sarif}.verify.sarif")
+            if [ "$mode" = both ]; then
+              args+=(--sarif "${sarif}.verify.sarif")
+            else
+              args+=(--sarif "$sarif")
+            fi
           fi
           if ! sorseal verify "${args[@]}"; then
             passed=false
@@ -111,7 +118,11 @@ runs:
         run_analyze() {
           local args=()
           if [ -n "$sarif" ]; then
-            args+=(--sarif "${sarif}.analyze.sarif")
+            if [ "$mode" = both ]; then
+              args+=(--sarif "${sarif}.analyze.sarif")
+            else
+              args+=(--sarif "$sarif")
+            fi
           fi
           if [ -n "${{ inputs.fail-on }}" ]; then
             args+=(--fail-on "${{ inputs.fail-on }}")
