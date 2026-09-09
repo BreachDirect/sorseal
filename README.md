@@ -39,9 +39,9 @@ git clone https://github.com/BreachDirect/sorseal.git && cd sorseal && cargo bui
 ```
 $ sorseal analyze
 
-Critical  SORSEAL-101  src/lib.rs:23 — function mutates state without require_auth
-High      SORSEAL-102  src/lib.rs:32 — reentrancy: state mutation + external call, no guard
-High      SORSEAL-105  src/lib.rs:42 — transfer amount not derived from balance read
+Critical  SORSEAL-101  src/lib.rs:23 — function mutates state without require_auth  (high confidence)
+High      SORSEAL-102  src/lib.rs:32 — reentrancy: state mutation + external call, no guard  (medium confidence)
+High      SORSEAL-105  src/lib.rs:42 — transfer amount not derived from balance read  (medium confidence)
 
 3 findings — Critical: 1 · High: 2 · Medium: 0 · Low: 0
 ```
@@ -93,6 +93,7 @@ sorseal verify            # rebuild and compare digests
 
 ```bash
 sorseal analyze                     # scan all artifacts
+sorseal analyze --wasm              # also scan the compiled WASM bytecode
 sorseal analyze --fail-on High      # CI gate: exit non-zero on High/Critical
 sorseal analyze --format json       # machine-readable findings
 sorseal analyze --sarif out.sarif   # SARIF for code scanning
@@ -127,24 +128,43 @@ sorseal watch           # daemon mode with webhook alerts
 
 ## Detection rules
 
-`sorseal analyze` checks for the patterns that let Soroban contracts get drained, reentered, or crashed. Each rule has a stable id, severity, and remediation:
+`sorseal analyze` checks for the patterns that let Soroban contracts get drained, reentered, or crashed. Each rule has a stable id, a severity (how bad an exploit would be) and a confidence (how certain the scan is that the finding is real — exact bytecode/pattern matches are high, heuristic data-flow-adjacent rules are medium/low):
 
-| Rule | Name | Severity | What it catches |
-|---|---|---|---|
-| `SORSEAL-101` | missing-authorization | Critical | State/value mutation without `require_auth` |
-| `SORSEAL-102` | reentrancy | High | External call after state mutation, no guard |
-| `SORSEAL-103` | unchecked-arithmetic | Medium | Raw `+`/`-`/`*` on amounts instead of `checked_*` |
-| `SORSEAL-104` | panic-on-user-input | Low | `panic!`/`unwrap()` on a caller-reachable path |
-| `SORSEAL-105` | unchecked-transfer | High | `.transfer` amount not derived from balance read |
-| `SORSEAL-106` | missing-reentrancy-guard | Medium | `invoke_contract` without `non_reentrant` |
-| `SORSEAL-107` | hardcoded-storage-key | Medium | Hardcoded `Symbol::new()` as persistent storage key — collisions across upgrades |
-| `SORSEAL-108` | unsafe-raw-pointer | Critical | `unsafe` block or raw pointer deref in contract code |
-| `SORSEAL-109` | panic-on-storage-read | Low | `unwrap()` on `env.storage()` read — panics if key missing |
-| `SORSEAL-110` | admin-key-never-rotated | Medium | `OWNER`/`ADMIN` storage write without rotation pattern |
-| `SORSEAL-111` | missing-token-balance-check | High | Token operation without verifying contract holds the asset |
-| `SORSEAL-112` | unchecked-env-caller | Medium | Caller address used without `require_auth` — spoofable |
+| Rule | Name | Severity | Confidence | What it catches |
+|---|---|---|---|---|
+| `SORSEAL-101` | missing-authorization | Critical | high | State/value mutation without `require_auth` |
+| `SORSEAL-102` | reentrancy | High | medium | External call after state mutation, no guard |
+| `SORSEAL-103` | unchecked-arithmetic | Medium | medium | Raw `+`/`-`/`*` on amounts instead of `checked_*` |
+| `SORSEAL-104` | panic-on-user-input | Low | high | `panic!`/`unwrap()` on a caller-reachable path |
+| `SORSEAL-105` | unchecked-transfer | High | medium | `.transfer` amount not derived from balance read |
+| `SORSEAL-106` | missing-reentrancy-guard | Medium | medium | `invoke_contract` without `non_reentrant` |
+| `SORSEAL-107` | hardcoded-storage-key | Medium | medium | Hardcoded `Symbol::new()` as persistent storage key — collisions across upgrades |
+| `SORSEAL-108` | unsafe-raw-pointer | Critical | high | `unsafe` block or raw pointer deref in contract code |
+| `SORSEAL-109` | panic-on-storage-read | Low | high | `unwrap()` on `env.storage()` read — panics if key missing |
+| `SORSEAL-110` | admin-key-never-rotated | Medium | low | `OWNER`/`ADMIN` storage write without rotation pattern |
+| `SORSEAL-111` | missing-token-balance-check | High | medium | Token operation without verifying contract holds the asset |
+| `SORSEAL-112` | unchecked-env-caller | Medium | medium | Caller address used without `require_auth` — spoofable |
+| `SORSEAL-113` | oracle-price-feed | Medium | low | Price-feed read with no staleness/auth guard — single-oracle manipulation |
+| `SORSEAL-114` | flash-loan-approve | High | low | Allowance granted + external call in the same function |
+| `SORSEAL-115` | wasm-unreachable-export | High | high | Deployed WASM body traps with an `unreachable` opcode (source scanners miss it) |
+| `SORSEAL-116` | wasm-no-exports | Medium | high | WASM module exports nothing — wrong artifact being sealed |
 
 Run `sorseal analyze --explain SORSEAL-107` for detailed guidance on any rule.
+
+## How sorseal compares
+
+Sorseal is the only tool in this table that ties source analysis to a **sealed, verifiable provenance record for Soroban**. It analyses your *own* contract source where Slither-analogues would, and dresses the results as signed in-toto/SLSA attestations you can verify on-chain.
+
+| Need | Tool | Sorseal's take |
+|---|---|---|
+| Solidity smart-contract security | Slither | Sorseal covers the Soroban/WASM analogue; here for framing |
+| Rust dependency CVEs | cargo-audit / cargo-deny | `record` gates builds the same way; `analyze` is about your own code, not deps |
+| Lockfile policy (licenses, duplicates) | cargo-deny | Complementary — `deny.toml` rules apply unchanged to Soroban builds |
+| Was your deployed contract swapped? | **—** | **sorseal `record` → `verify` → `onchain-verify` (unique)** |
+| Are my build attestations signed? | **—** | **sorseal `sign` (Ed25519 DSSE, SLSA v1.0) (unique)** |
+| Does my contract get reentered/drained? | Soroban security reviews (manual) | `sorseal analyze` catches 16 known patterns automatically |
+
+**Why these 16 checks and not others:** the rule set is the minimum that, applied mechanically, misses materially fewer of the vulnerabilities that actually drain Soroban contracts (missing auth, unchecked arithmetic/transfers, reentrancy, oracle manipulation) than a manual review does, while staying deliberately lexical so it has **zero build-time deps and zero false-negative cost from unparseable code**. Rules are pure-pattern and explicitly low-confidence where data flow would be needed — see [RULES.md](RULES.md) for the reasoning per rule and the changelog. Anything beyond that (taint tracking, custom rules) is on the roadmap.
 
 ## Architecture at a glance
 
@@ -188,11 +208,14 @@ This repository is a **Stellar Drips Wave 9** project. The quickest ways to cont
 | CI / SARIF + GitHub Action | shipped |
 | Signed attestations (SLSA v1.0) | shipped |
 | On-chain verification + upgrade audit | shipped |
-| Vulnerability scan (12 rules, `--seal`) | shipped |
+| Vulnerability scan (16 rules, `--wasm`, confidence scores, `--seal`) | shipped |
 | CI severity gate (`--fail-on`) | shipped |
 | File integrity monitoring | shipped |
-| Prebuilt binary releases | shipped |
-| Additional detection rules | in progress |
+| Prebuilt binary releases (Linux/macOS/Windows) | shipped |
+| **Detection engine** (data-flow awareness to cut heuristics → low-confidence) | in progress |
+| **Extensible rules** (team-local custom patterns via config) | in progress |
+| **`npx sorseal` wrapper + VS Code extension** | in progress |
+| **Hosted verify-any-contract page + provenance badge** | in progress |
 
 ## License
 

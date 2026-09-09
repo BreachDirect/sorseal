@@ -25,6 +25,7 @@ sorseal init|record|verify|report|keygen|sign|verify-attestation|onchain-verify|
         ├─ src/sim.rs        fund-free simulated ledger (MockTransport) for offline on-chain demo
         ├─ src/watch.rs      file integrity monitoring (baseline, drift detection, webhooks)
         ├─ src/analyze.rs    static Soroban/Rust vulnerability analysis (findings, SARIF/Markdown)
+        ├─ src/wasm_scan.rs  dependency-free WASM section walker for analyze --wasm (traps/exports)
         ├─ src/git.rs        read-only git helpers (commit, clean, ancestor)
         └─ src/clock.rs      RFC 3339 UTC formatting (no date-time dependency)
 ```
@@ -123,24 +124,31 @@ The XDR decoder is hand-rolled like the `onchain-verify` path, sharing the
 1. Read `sorseal.toml`; select a single artifact (`--artifact`) or use the first.
 2. Walk `source_root` for `.rs` files, skipping `target/`, `.git/`, builds, and
    `#[cfg(test)]` modules.
-3. Split each file into function bodies; run the pattern rules per line:
-   - **SORSEAL-101 missing-authorization** (Critical): a function mutates
-     storage or moves value (assignments to `set()`/transfer calls) with no
-     prior `require_auth`.
-   - **SORSEAL-102 reentrancy** (High): a function mutates state and then makes
-     an external `invoke_contract`/`call_contract`/token call without an auth
-     guard.
-   - **SORSEAL-103 unchecked-arithmetic** (Medium): raw `+`/`-`/`*` on a likely
-     value quantity (`i128`/`u128`/amount names) instead of `checked_*`.
-   - **SORSEAL-104 panic-on-input** (Low): `panic!`/`unwrap()` on a
-     caller-reachable value path instead of a `Result`.
-   - **SORSEAL-106 missing-reentrancy-guard** (Medium): `invoke_contract` /
-     `call_contract` call without a `non_reentrant` attribute on the same line.
-4. Serialize findings deterministically (sorted by rule → file → line) and hash
-   them into an analysis digest (SHA-256).
-5. Render console findings, per-severity summary and digest to stdout; optionally
+| RuleId | What it does | Severity / Confidence |
+    |---|---|---|
+    | SORSEAL-101 missing-authorization | function mutates storage or moves value with no prior `require_auth` | Critical / high |
+    | SORSEAL-102 reentrancy | external `invoke_contract`/`call_contract` after state mutation, no auth guard | High / medium |
+    | SORSEAL-103 unchecked-arithmetic | raw `+`/`-`/`*` on a likely value quantity instead of `checked_*` | Medium / medium |
+    | SORSEAL-104 panic-on-input | `panic!`/`unwrap()` on a caller-reachable value path | Low / high |
+    | SORSEAL-106 missing-reentrancy-guard | `invoke_contract`/`call_contract` without `non_reentrant` on the same line | Medium / medium |
+
+    Rules 105, 107–116 follow the same shape (see `RULES.md` for the full
+    map). `SORSEAL-110..114` are **function-level** rules that inspect the whole
+    function body; `SORSEAL-115/116` are **WASM-level** rules run only by
+    `analyze --wasm` against the compiled artifact bytes (`src/wasm_scan.rs`).
+
+4. To keep this fast, `analyze_file` pre-lexes each source line **once** into
+   comment/string-stripped and lowercased views (`src/analyze.rs`); every rule
+   matcher reads those views instead of re-tokenizing. A `--wasm` run appends
+   findings and re-sorts with the source findings.
+5. Serialize findings deterministically (sorted by rule → file → line) and hash
+   them into an analysis digest (SHA-256). Every finding carries a `confidence`
+   (a per-rule property from `RuleMeta`, independent of severity) surfaced in
+   console/JSON/Markdown/SARIF but deliberately **not** in the digest, so
+   provenance remain stable across analyzer-only changes.
+6. Render console findings, per-severity summary and digest to stdout; optionally
    render Markdown (`--format markdown`) or SARIF 2.1.0 (`--sarif PATH`).
-6. With `--seal`: append an `ArtifactAnalysis` entry (rule count, worst severity,
+7. With `--seal`: append an `ArtifactAnalysis` entry (rule count, worst severity,
    digest, timestamp) to the matching artifact in `sorseal.provenance.json`.
    `verify` then cross-checks that the analysis digest is stable and that the
    source under the seal is unchanged.
