@@ -58,3 +58,104 @@ pub fn contains(cwd: &Path, commit: &str) -> Result<bool> {
         .output()?;
     Ok(out.status.success())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+
+    /// A temp-dir that is itself a fresh git repo.
+    fn git_tempdir() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(dir.path())
+            .arg("init")
+            .output()
+            .unwrap()
+            .status;
+        assert!(status.success(), "git init failed in {:?}", dir.path());
+        dir
+    }
+
+    /// Commit a file so HEAD exists; returns the commit hex.
+    fn initial_commit(dir: &std::path::Path, name: &str) -> String {
+        std::fs::write(dir.join(name), name).unwrap();
+        let ok = Command::new("git")
+            .current_dir(dir)
+            .args(["add", name])
+            .output()
+            .unwrap();
+        assert!(ok.status.success());
+        let ok = Command::new("git")
+            .current_dir(dir)
+            .env("GIT_AUTHOR_NAME", "test")
+            .env("GIT_AUTHOR_EMAIL", "test@example.com")
+            .env("GIT_COMMITTER_NAME", "test")
+            .env("GIT_COMMITTER_EMAIL", "test@example.com")
+            .args(["commit", "-m", "initial"])
+            .output()
+            .unwrap();
+        assert!(ok.status.success(), "commit failed");
+        String::from_utf8_lossy(
+            &Command::new("git")
+                .current_dir(dir)
+                .args(["rev-parse", "HEAD"])
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .trim()
+        .to_string()
+    }
+
+    #[test]
+    fn git_state_present_in_clean_repo() {
+        let dir = git_tempdir();
+        initial_commit(dir.path(), "a.txt");
+        let state = git_state(dir.path()).unwrap();
+        assert!(state.present);
+        assert!(!state.commit.is_empty());
+        assert!(state.clean);
+    }
+
+    #[test]
+    fn git_state_reports_dirty_tree() {
+        let dir = git_tempdir();
+        initial_commit(dir.path(), "a.txt");
+        std::fs::write(dir.path().join("a.txt"), "changed").unwrap();
+        let state = git_state(dir.path()).unwrap();
+        assert!(state.present);
+        assert!(!state.clean);
+    }
+
+    #[test]
+    fn git_state_absent_outside_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = git_state(dir.path()).unwrap();
+        assert!(!state.present);
+        assert!(state.commit.is_empty());
+        assert!(!state.clean);
+    }
+
+    #[test]
+    fn contains_true_for_reachable_commit() {
+        let dir = git_tempdir();
+        let head = initial_commit(dir.path(), "a.txt");
+        assert!(contains(dir.path(), &head).unwrap());
+    }
+
+    #[test]
+    fn contains_false_for_unknown_commit() {
+        let dir = git_tempdir();
+        initial_commit(dir.path(), "a.txt");
+        assert!(!contains(dir.path(), "0000000000000000000000000000000000000000").unwrap());
+    }
+
+    #[test]
+    fn contains_false_and_reports_error_outside_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        // Outside a repo git errors on stderr; contains maps that to Ok(false).
+        assert!(!contains(dir.path(), "abc").unwrap());
+    }
+}
