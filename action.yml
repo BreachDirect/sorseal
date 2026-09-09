@@ -1,8 +1,9 @@
 name: 'sorseal'
 description: >-
   Prove that your Soroban/WASM contract artifacts match the sealed provenance
-  record. Runs `sorseal verify` in CI and can upload the results to GitHub
-  code scanning as SARIF.
+  record, and scan contract source for known-fragile Soroban patterns. Runs
+  `sorseal verify` and `sorseal analyze` in CI and can upload results to
+  GitHub code scanning as SARIF.
 author: BreachDirect
 branding:
   icon: 'shield'
@@ -25,12 +26,26 @@ inputs:
       Path to the sealed sorseal.provenance.json, relative to `working-directory`.
     required: false
     default: 'sorseal.provenance.json'
+  mode:
+    description: >-
+      What to run: `verify` (provenance only — default), `analyze` (scan only),
+      or `both` (verify + analyze). In `analyze`/`both` mode, `analyze --fail-on`
+      is used as a CI gate when `fail-on` is set.
+    required: false
+    default: 'verify'
   sarif-file:
     description: >-
       Path to write the SARIF report (relative to `working-directory`). When
       set, the action uploads it to GitHub code scanning automatically.
     required: false
     default: ''
+  fail-on:
+    description: >-
+      Severity threshold for `analyze --fail-on`. When set in analyze/both
+      mode, the build fails if any finding is at or above this severity.
+      Accepted values: Low, Medium, High, Critical (case-insensitive).
+    required: false
+    default: 'High'
   toolchain:
     description: >-
       Rust toolchain to use for the standalone build. Defaults to stable.
@@ -47,8 +62,8 @@ inputs:
 outputs:
   passed:
     description: >-
-      'true' when every provenance check passed, 'false' otherwise.
-    value: ${{ steps.verify.outputs.passed }}
+      'true' when every provenance/analysis check passed, 'false' otherwise.
+    value: ${{ steps.checks.outputs.passed }}
 
 runs:
   using: composite
@@ -73,24 +88,55 @@ runs:
         cp "${{ github.action_path }}/target/release/sorseal" "$RUNNER_TOOL_CACHE/sorseal/sorseal"
         echo "$RUNNER_TOOL_CACHE/sorseal" >> "$GITHUB_PATH"
 
-    - name: Verify provenance
-      id: verify
+    - name: Run sorseal checks
+      id: checks
       shell: bash
       working-directory: ${{ github.workspace }}/${{ inputs.working-directory }}
       run: |
-        args=(--manifest "${{ inputs.manifest }}" --provenance "${{ inputs.provenance }}")
-        if [ -n "${{ inputs.sarif-file }}" ]; then
-          args+=(--sarif "${{ inputs.sarif-file }}")
-        fi
-        if sorseal verify "${args[@]}"; then
-          echo "passed=true" >> "$GITHUB_OUTPUT"
-        else
-          echo "passed=false" >> "$GITHUB_OUTPUT"
-          exit 1
-        fi
+        set -euo pipefail
+        mode="${{ inputs.mode }}"
+        sarif="${{ inputs.sarif-file }}"
+        passed=true
+
+        run_verify() {
+          local args=(--manifest "${{ inputs.manifest }}" --provenance "${{ inputs.provenance }}")
+          if [ -n "$sarif" ]; then
+            args+=(--sarif "${sarif}.verify.sarif")
+          fi
+          if ! sorseal verify "${args[@]}"; then
+            passed=false
+          fi
+        }
+
+        run_analyze() {
+          local args=()
+          if [ -n "$sarif" ]; then
+            args+=(--sarif "${sarif}.analyze.sarif")
+          fi
+          if [ -n "${{ inputs.fail-on }}" ]; then
+            args+=(--fail-on "${{ inputs.fail-on }}")
+          fi
+          # analyze is report-only without --fail-on, so gate explicitly
+          if ! sorseal analyze "${args[@]}"; then
+            passed=false
+          fi
+        }
+
+        case "$mode" in
+          verify) run_verify ;;
+          analyze) run_analyze ;;
+          both)
+            run_verify
+            run_analyze
+            ;;
+          *) echo "::error::unknown mode '$mode' (expected verify|analyze|both)"; passed=false ;;
+        esac
+
+        echo "passed=$passed" >> "$GITHUB_OUTPUT"
+        [ "$passed" = true ]
 
     - name: Upload SARIF to code scanning
       if: inputs.sarif-file != '' && always()
       uses: github/codeql-action/upload-sarif@v4
       with:
-        sarif_file: ${{ github.workspace }}/${{ inputs.working-directory }}/${{ inputs.sarif-file }}
+        sarif_file: ${{ github.workspace }}/${{ inputs.working-directory }}
