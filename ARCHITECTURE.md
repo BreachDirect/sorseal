@@ -27,6 +27,7 @@ sorseal init|record|verify|report|keygen|sign|verify-attestation|onchain-verify|
         ├─ src/analyze.rs    static Soroban/Rust vulnerability analysis (findings, SARIF/Markdown)
         ├─ src/wasm_scan.rs  dependency-free WASM section walker for analyze --wasm (traps/exports)
         ├─ src/git.rs        read-only git helpers (commit, clean, ancestor)
+        ├─ src/hook.rs       pre-commit hook install/uninstall/status (verify + analyze gate)
         └─ src/clock.rs      RFC 3339 UTC formatting (no date-time dependency)
 ```
 

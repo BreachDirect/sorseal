@@ -12,10 +12,11 @@ yanked = "deny"
 unmaintained = "workspace"
 
 [licenses]
-# The exact license set currently present in the dependency tree, plus MIT and
-# Apache-2.0 (sorseal's own dual-license convention). Anything not listed here
-# fails CI, so a new dependency cannot introduce a copyleft or unknown license
-# without an explicit review and an entry in this list.
+# The exact license set currently present in the dependency tree, plus MIT
+# (sorseal's own license per LICENSE/Cargo.toml) and Apache-2.0 (commonly
+# required by Rust ecosystem deps). Anything not listed here fails CI, so a
+# new dependency cannot introduce a copyleft or unknown license without an
+# explicit review and an entry in this list.
 allow = [
     "MIT",
     "Apache-2.0",

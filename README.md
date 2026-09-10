@@ -58,6 +58,10 @@ PASSED  my-contract :: command  — build_command unchanged
 
 > **Try it now:** `cd examples/vulnerable-contract && sorseal analyze`
 
+### On-chain demo without funds
+
+`scripts/sim-demo.sh` walks the full `record → verify → simulate-onchain → onchain-audit` chain against an **in-memory synthetic ledger** — no testnet account, no XLM, no `stellar` CLI. For a live testnet run (needs a funded account), see `scripts/demo.sh`.
+
 ## Add one line to your CI
 
 Every pull request gets scanned automatically. Upload results to GitHub Code Scanning:
@@ -125,6 +129,7 @@ sorseal watch           # daemon mode with webhook alerts
 | `sorseal simulate-onchain` | Fund-free offline on-chain verify + audit demo |
 | `sorseal analyze` | Scan source for Soroban vulnerability patterns |
 | `sorseal watch` | Monitor files for integrity drift, alert on changes |
+| `sorseal hook` | Install/uninstall/status for a `verify + analyze` pre-commit hook |
 
 ## Detection rules
 

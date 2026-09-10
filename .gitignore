@@ -7,3 +7,8 @@ target/
 *.swp
 coverage/
 dist/
+# Artifacts sorseal itself generates (root-level demo runs)
+/sorseal.toml
+/sorseal.provenance.json
+/sorseal.sarif
+/sorseal.watch.toml
