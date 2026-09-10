@@ -8,7 +8,7 @@
   <a href="https://github.com/BreachDirect/sorseal/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/rust-1.85+-orange.svg" alt="MSRV 1.85">
   <a href="https://github.com/BreachDirect/sorseal/actions/workflows/security.yml"><img src="https://github.com/BreachDirect/sorseal/actions/workflows/security.yml/badge.svg" alt="Security audit"></a>
-  <a href="https://github.com/BreachDirect/sorseal/blob/main/WAVE_EVIDENCE_ToryMic.md"><img src="https://img.shields.io/badge/stellar-wave_9-6B3FA0.svg" alt="Wave 9"></a>
+  <a href="https://github.com/BreachDirect/sorseal/blob/main/docs/WAVE_EVIDENCE_ToryMic.md"><img src="https://img.shields.io/badge/stellar-wave_9-6B3FA0.svg" alt="Wave 9"></a>
 </p>
 
 ---
@@ -185,9 +185,9 @@ sorseal watch        ──→  hash baseline → drift detection → Discord/Te
 
 ## Ecosystem work & Wave evidence
 
-This repository is part of a broader set of contributions to the Stellar / Soroban ecosystem. See [WAVE_EVIDENCE_ToryMic.md](WAVE_EVIDENCE_ToryMic.md) for a curated list of related projects, demos, and tooling maintained by ToryMic, including testing, indexers, contract frameworks, and privacy/payment prototypes.
+This repository is part of a broader set of contributions to the Stellar / Soroban ecosystem. See [WAVE_EVIDENCE_ToryMic.md](docs/WAVE_EVIDENCE_ToryMic.md) for a curated list of related projects, demos, and tooling maintained by ToryMic, including testing, indexers, contract frameworks, and privacy/payment prototypes.
 
-- Evidence file: [WAVE_EVIDENCE_ToryMic.md](WAVE_EVIDENCE_ToryMic.md)
+- Evidence file: [WAVE_EVIDENCE_ToryMic.md](docs/WAVE_EVIDENCE_ToryMic.md)
 - Maintainers: [MAINTAINERS.md](MAINTAINERS.md)
 
 ## Contributing
