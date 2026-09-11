@@ -39,8 +39,15 @@ happened since the review, not a plan.
 
 **3. Maintainer activity in the ecosystem**
 
-- Published to crates.io (`sorseal` v0.2.0, docs.rs live) — installable by
-  any Stellar developer.
+- Published and verified live on crates.io (`sorseal` v0.2.0, docs.rs
+  auto-built): https://crates.io/crates/sorseal — installable by any Stellar
+  developer.
+- Engaged directly with Stellar tooling: filed
+  [stellar/stellar-cli#2723](https://github.com/stellar/stellar-cli/issues/2723)
+  — a feature request to add a command that prints the live wasm hash of a
+  deployed contract, closing the exact verification gap `sorseal` automates.
+  The proposal adopts the upgrade-audit root-cause analysis built into
+  `sorseal onchain-audit`.
 - Released v0.2.0 with binaries and SHA-256 checksums for five platforms; a
   GitHub Action (SARIF output, `verify`/`analyze`, `fail-on`); a pre-commit
   hook; a fund-free `simulate-onchain` testnet demo with an upgradeable
