@@ -9,7 +9,7 @@ rust-version = "1.85"
 repository = "https://github.com/BreachDirect/sorseal"
 homepage = "https://github.com/BreachDirect/sorseal"
 readme = "README.md"
-keywords = ["soroban", "stellar", "wasm", "provenance", "reproducible-builds", "static-analysis", "security", "supply-chain"]
+keywords = ["soroban", "stellar", "wasm", "security", "provenance"]
 categories = ["development-tools::build-utils", "command-line-utilities", "development-tools::testing"]
 
 [lib]
