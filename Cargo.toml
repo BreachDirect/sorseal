@@ -2,14 +2,15 @@
 name = "sorseal"
 version = "0.2.0"
 edition = "2021"
-description = "Provenance for Soroban/WASM artifacts — prove deployed bytecode matches source."
+description = "Provenance + security scanner for Soroban/WASM artifacts."
 license = "MIT"
 authors = ["BreachDirect"]
 rust-version = "1.85"
 repository = "https://github.com/BreachDirect/sorseal"
+homepage = "https://github.com/BreachDirect/sorseal"
 readme = "README.md"
-keywords = ["soroban", "stellar", "wasm", "provenance", "reproducible-builds"]
-categories = ["development-tools::build-utils", "command-line-utilities"]
+keywords = ["soroban", "stellar", "wasm", "provenance", "reproducible-builds", "static-analysis", "security", "supply-chain"]
+categories = ["development-tools::build-utils", "command-line-utilities", "development-tools::testing"]
 
 [lib]
 name = "sorseal"
