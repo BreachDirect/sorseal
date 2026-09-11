@@ -23,13 +23,18 @@ Every Soroban deployment is a trust assumption. Was the WASM on-chain built from
 
 ```bash
 # prebuilt binary (fastest)
-curl -sSfL https://github.com/BreachDirect/sorseal/releases/latest/download/sorseal-linux-amd64 -o /usr/local/bin/sorseal && chmod +x /usr/local/bin/sorseal
-
-# or via crates.io
-cargo install sorseal --locked
+# Download the archive for your platform from the latest release,
+# then extract the `sorseal` binary onto your PATH:
+#   https://github.com/BreachDirect/sorseal/releases/latest
+#   assets: sorseal-<version>-x86_64-unknown-linux-gnu.tar.gz
+#           sorseal-<version>-aarch64-unknown-linux-gnu.tar.gz
+#           sorseal-<version>-x86_64-apple-darwin.tar.gz
+#           sorseal-<version>-aarch64-apple-darwin.tar.gz
+#           sorseal-<version>-x86_64-pc-windows-msvc.zip
+# Verify integrity against sorseal-<version>-checksums.txt.
 
 # or from source
-git clone https://github.com/BreachDirect/sorseal.git && cd sorseal && cargo build --release
+git clone https://github.com/BreachDirect/sorseal.git && cd sorseal && cargo install --path . --locked
 ```
 
 **Requirements:** Rust 1.85+ and `wasm32-unknown-unknown` target (`rustup target add wasm32-unknown-unknown`).
