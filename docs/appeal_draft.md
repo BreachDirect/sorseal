@@ -1,8 +1,10 @@
 # Wave appeal — sorseal (BreachDirect/sorseal)
 
-> Paste this into the appeal form. Insert the original rejection quote (if one
-> was provided) in the bracketed section and trim the "Format-check" paragraph
-> if the form has a length limit.
+> Paste this into the appeal form. The rejection letter quoted the intake
+> criteria (past repo & hackathon activity, code & documentation substance,
+> maintainer activity in the ecosystem, and more) with no contract-specific
+> reasons, so the appeal below addresses **each listed criterion with evidence
+> that can be verified by opening the repository today**.
 
 ---
 
@@ -10,57 +12,59 @@
 **Maintainer:** ToryMic (`github.com/ToryMic`)
 **Appealing:** the rejection of `sorseal` from Stellar Drips Wave 9.
 
-Since the original review, the project has changed materially on every axis the
-Wave rubric measures: code, project quality, and activity.
+The rejection letter asked for substantive work on the repository. Substantive
+work is what this appeal is about — every item below is a change that has
+happened since the review, not a plan.
 
-**1. Substantive code changes since rejection**
+**1. Code substance**
 
 - `sorseal analyze`: a dependency-free static security analyzer for Soroban
   contracts — 16 rules (missing auth, reentrancy, unchecked arithmetic and
-  transfers, oracle manipulation, flash-loan approvals, etc.), per-rule
-  confidence scores, inline suppressions, JSON output, and WASM-level scanning
-  of the compiled artifact. Findings stay reproducible enough to be sealed into
-  a signed digest — verification fails if the analysis secrets differ.
+  transfers, oracle manipulation, flash-loan approvals, unsafe code, storage
+  key hygiene), per-rule confidence scores, inline suppressions, JSON output,
+  and WASM-level scanning of the compiled artifact. Findings are stable
+  enough to be sealed into a signed digest that fails verification when the
+  analysis changes.
 - `sorseal onchain-audit`: full upgrade-lineage audit of a deployed contract
-  from ledger events.
-- Provenance core: Ed25519/SLSA v1.0 DSSE attestations, sealed reproducible
-  builds, cross-platform reproducibility (path normalization fixed so digests
-  are identical on macOS/Windows/Linux).
+  from ledger events; provenance core with Ed25519/SLSA v1.0 DSSE
+  attestations and cross-platform reproducible digests.
 
-**2. Project quality**
+**2. Documentation substance**
 
-- 120 tests (unit, CLI, golden-file regression, perf), all green on a three-OS
-  CI matrix (Ubuntu/macOS/Windows). Clippy `-D warnings`, `cargo fmt` enforced.
-- Weekly `cargo audit` + `cargo deny` gate (advisories, yanked deps, license
-  checks); `#![forbid(unsafe_code)]`; dependency tree deliberately small.
-- Released **v0.2.0** with signed checksums and binaries for five platforms, a
-  GitHub Action (SARIF output, `verify`/`analyze` modes, `fail-on`), docs
-  (architecture, threat model, per-rule rationale), SECURITY.md, CODEOWNERS,
-  changelog, and a mergable ruleset with enforced required checks.
-- Community contribution merged: `md_escape` hardening (PR #24).
+- Reproducible examples shipped and linked from the README:
+  [analysis showcase](https://github.com/BreachDirect/sorseal/blob/main/docs/analysis_showcase.md)
+  — 20 findings (6 Critical · 3 High · 9 Medium · 2 Low) on a teaching
+  contract, 0 findings on a clean contract, both reproducible with
+  `cargo install sorseal --locked`.
 
-**3. Activity**
+**3. Maintainer activity in the ecosystem**
 
-- 60+ commits between 2026-08-05 and the release; regular dependency
-  maintenance (dependabot), tagged release, and an active triaged backlog:
-  4 open `good-first-issue`s, each scoped to a weekend, plus a phased roadmap
-  (keyless OIDC signing, multi-signer rotation, hosted verification API).
-- A `sorseal hook` pre-commit integration and an end-to-end testnet demo
-  (fund-free `simulate-onchain`) keep the tool usable day one by Stellar
-  developers.
+- Published to crates.io (`sorseal` v0.2.0, docs.rs live) — installable by
+  any Stellar developer.
+- Released v0.2.0 with binaries and SHA-256 checksums for five platforms; a
+  GitHub Action (SARIF output, `verify`/`analyze`, `fail-on`); a pre-commit
+  hook; a fund-free `simulate-onchain` testnet demo with an upgradeable
+  contract; and a comparison to Slither/cargo-audit in the README.
+- 60+ commits between 2026-08-05 and the release, with a dependency-update
+  cadence (dependabot) and one community PR already merged (#24).
 
-**4. Ecosystem relevance**
+**4. Project quality**
 
-- No comparable tool exists for Soroban/WASM provenance (it also covers the
-  real upgrade risk: wasm hashes change on `update_current_contract_wasm`, so
-  deployed bytecode must be re-verified). The recommendations of a recent
-  ecosystem audit on upgrading/auditing Soroban contracts map directly to what
-  `sorseal` automates.
+- 120 tests green on a three-OS CI matrix (Ubuntu/macOS/Windows); clippy
+  `-D warnings`, fmt enforced; weekly `cargo audit` + `cargo deny` gate;
+  `#![forbid(unsafe_code)]`; CI merges enforce required checks via ruleset.
+- Contributor pipeline: 16 open issues, 5 labelled `good-first-issue`, each
+  scoped and test-accepted (see the phase slices under #4/#7/#8/#9), plus
+  CONTRIBUTING.md, CODEOWNERS, SECURITY.md, and a changelog.
 
-[If the review quoted specific concerns, paste them here and address each:
-**Original concern:** ___ / **What changed:** ___]
+**5. Past activity**
 
-**Format-check:** the repository is live (`main`), public, MIT-licensed, with
-real commits on a regular cadence (most recent: {DATE}), so the acceptance
-criteria for an active, contributor-ready project are met today and can be
-verified by opening any of the `good-first-issue` labels.
+- The repository is new (2026-08-05) and was built for the current Wave; as
+  demanded by the rules, the appeal body describes work done since the
+  rejection rather than prior history. The artefact trail is verifiable: git
+  log, merged PRs, releases, crates.io, and public issues all match the
+  claims above.
+
+**Verification:** any reviewer can reproduce the showcase, build from source,
+run `cargo test`, or pick up any `good-first-issue` and land it — the project
+meets the acceptance bar for an active, contributor-ready repository today.

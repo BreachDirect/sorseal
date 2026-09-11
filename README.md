@@ -200,6 +200,7 @@ This repository is part of a broader set of contributions to the Stellar / Sorob
 - Evidence file: [WAVE_EVIDENCE_ToryMic.md](docs/WAVE_EVIDENCE_ToryMic.md)
 - Release notes: [RELEASES.md](RELEASES.md)
 - Changelog: [CHANGELOG.md](CHANGELOG.md)
+- Analysis showcase: [docs/analysis_showcase.md](docs/analysis_showcase.md)
 - Maintainers: [MAINTAINERS.md](MAINTAINERS.md)
 
 ## Contributing
