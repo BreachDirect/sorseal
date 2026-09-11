@@ -5,6 +5,8 @@
 
 <p align="center">
   <a href="https://github.com/BreachDirect/sorseal/actions/workflows/ci.yml"><img src="https://github.com/BreachDirect/sorseal/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://crates.io/crates/sorseal"><img src="https://img.shields.io/crates/v/sorseal.svg" alt="Latest crate version"></a>
+  <a href="https://crates.io/crates/sorseal"><img src="https://img.shields.io/crates/d/sorseal.svg" alt="crates.io downloads"></a>
   <a href="https://github.com/BreachDirect/sorseal/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/rust-1.85+-orange.svg" alt="MSRV 1.85">
   <a href="https://github.com/BreachDirect/sorseal/actions/workflows/security.yml"><img src="https://github.com/BreachDirect/sorseal/actions/workflows/security.yml/badge.svg" alt="Security audit"></a>
@@ -32,6 +34,9 @@ Every Soroban deployment is a trust assumption. Was the WASM on-chain built from
 #           sorseal-<version>-aarch64-apple-darwin.tar.gz
 #           sorseal-<version>-x86_64-pc-windows-msvc.zip
 # Verify integrity against sorseal-<version>-checksums.txt.
+
+# or via crates.io
+cargo install sorseal --locked
 
 # or from source
 git clone https://github.com/BreachDirect/sorseal.git && cd sorseal && cargo install --path . --locked
