@@ -3,9 +3,10 @@
 Prebuilt binaries (Linux/macOS/Windows) are uploaded on every tagged release by
 `.github/workflows/release.yml`. The changelog below is grouped by tag.
 
-## v0.2.0 (draft — unreleased)
+## v0.2.0 (2026-09-11)
 
-Release notes prepared for the `v0.2.0` tag.
+Released. SHA-256 checksums and five platform binaries are attached to the
+[`v0.2.0` GitHub release](https://github.com/BreachDirect/sorseal/releases/tag/v0.2.0).
 
 ### Detection engine
 

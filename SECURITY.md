@@ -2,11 +2,12 @@
 
 ## Supported Versions
 
-Only the latest commit on `main` is actively maintained. There are no versioned
-releases at this time.
+The latest patch release and `main` are actively maintained. Security fixes
+are backported to the latest release when a fix is available.
 
-| Branch | Supported |
+| Version | Supported |
 | --- | --- |
+| `v0.2.x` | ✅ Yes |
 | `main` | ✅ Yes |
 | older | ❌ No |
 

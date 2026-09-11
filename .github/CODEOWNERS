@@ -1,0 +1,7 @@
+# Global code owners for review routing.
+* @ToryMic
+
+# Security-sensitive paths get a second explicit owner.
+SECURITY.md @ToryMic
+.github/workflows/ @ToryMic
+action.yml @ToryMic
