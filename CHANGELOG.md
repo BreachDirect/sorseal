@@ -6,6 +6,18 @@ All notable changes to this project are documented here. Per-release detail in
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Project paths (artifacts, build commands, provenance, SARIF) now resolve
+  relative to the manifest file instead of the process CWD, so
+  `sorseal analyze --manifest path/to/sorseal.toml` works from any directory.
+- `record`/`verify` build commands run via `cmd /C` on Windows (`sh` is not a
+  native Windows command).
+- `watch` webhook delivery is capped at 15s per attempt so a silent endpoint
+  cannot stall the monitor loop indefinitely.
+
 ## [0.2.0] - 2026-09-11
 
 ### Added
