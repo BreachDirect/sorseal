@@ -3,6 +3,20 @@
 Prebuilt binaries (Linux/macOS/Windows) are uploaded on every tagged release by
 `.github/workflows/release.yml`. The changelog below is grouped by tag.
 
+## v0.2.1 (2026-09-12)
+
+Released on crates.io. No GitHub tag or binaries — a fixes-only patch after
+`v0.2.0`:
+
+- **Manifest-relative paths.** All project paths (artifacts, build commands,
+  provenance, SARIF) resolve relative to the manifest file, not the process
+  CWD — `sorseal analyze --manifest path/to/sorseal.toml` now works from any
+  directory instead of silently scanning the wrong tree.
+- **Windows builds.** `record`/`verify` run the build command via `cmd /C`
+  (Git Bash's `sh` is not guaranteed on Windows).
+- **Webhook backstop.** `watch` caps each webhook delivery at 15s so a silent
+  endpoint cannot stall the monitor loop.
+
 ## v0.2.0 (2026-09-11)
 
 Released. SHA-256 checksums and five platform binaries are attached to the
