@@ -8,11 +8,12 @@ shipped in this repository:
 | `examples/vulnerable-contract` | Teaching contract, every function contains a known-fragile Soroban pattern | 20 findings (6 Critical · 3 High · 9 Medium · 2 Low) |
 | `examples/demo-contract` | Clean upgradeable testnet contract | 0 findings |
 
-Both runs are reproducible locally:
+Both runs are reproducible locally — project paths resolve relative to the
+manifest file, so they work from the repository root too:
 
 ```bash
-cd examples/vulnerable-contract && sorseal analyze
-cd examples/demo-contract        && sorseal analyze
+sorseal analyze --manifest examples/vulnerable-contract/sorseal.toml
+sorseal analyze --manifest examples/demo-contract/sorseal.toml
 ```
 
 `cargo install sorseal --locked` or `cargo run --release --` both work; the

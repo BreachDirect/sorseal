@@ -66,7 +66,7 @@ PASSED  my-contract :: command  — build_command unchanged
 3 checks: 3 passed, 0 failed, 0 errored
 ```
 
-> **Try it now:** `cd examples/vulnerable-contract && sorseal analyze`
+> **Try it now:** `sorseal analyze --manifest examples/vulnerable-contract/sorseal.toml` (paths resolve relative to the manifest, so this works from anywhere)
 
 ### On-chain demo without funds
 

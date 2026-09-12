@@ -47,8 +47,15 @@ pub fn toolchain() -> String {
 }
 
 fn run_build(base: &Path, command: &str) -> Result<()> {
-    let status = Command::new("sh")
-        .arg("-c")
+    // `sh` is not a native Windows command, so use `cmd /C` there; on Unix
+    // `sh -c` preserves the POSIX semantics contract authors expect.
+    #[cfg(windows)]
+    let shell = ("cmd", "/C");
+    #[cfg(not(windows))]
+    let shell = ("sh", "-c");
+
+    let status = Command::new(shell.0)
+        .arg(shell.1)
         .arg(command)
         .current_dir(base)
         .status()

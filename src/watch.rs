@@ -18,6 +18,20 @@ use std::time::Duration;
 pub const WATCH_CONFIG_FILENAME: &str = "sorseal.watch.toml";
 pub const WATCH_STATE_FILENAME: &str = "sorseal.watchstate.json";
 
+/// Upper bound on a single webhook delivery attempt. A silent or stalled
+/// endpoint is skipped rather than wedging the watch loop indefinitely.
+const WEBHOOK_TIMEOUT: Duration = Duration::from_secs(15);
+
+fn webhook_agent() -> &'static ureq::Agent {
+    static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
+    AGENT.get_or_init(|| {
+        ureq::Agent::config_builder()
+            .timeout_global(Some(WEBHOOK_TIMEOUT))
+            .build()
+            .new_agent()
+    })
+}
+
 // ── Config types ────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -322,7 +336,7 @@ pub fn send_alerts(config: &WatchConfig, failed: &[FileCheck]) -> Result<()> {
         match wh {
             Webhook::Discord { url } => {
                 let body = serde_json::json!({ "content": &text });
-                if let Err(e) = ureq::post(url).send_json(&body) {
+                if let Err(e) = webhook_agent().post(url).send_json(&body) {
                     eprintln!("webhook discord failed: {e}");
                 }
             }
@@ -333,7 +347,7 @@ pub fn send_alerts(config: &WatchConfig, failed: &[FileCheck]) -> Result<()> {
                     "text": &text,
                     "parse_mode": "Markdown"
                 });
-                if let Err(e) = ureq::post(&url).send_json(&body) {
+                if let Err(e) = webhook_agent().post(&url).send_json(&body) {
                     eprintln!("webhook telegram failed: {e}");
                 }
             }
@@ -350,7 +364,7 @@ pub fn send_alerts(config: &WatchConfig, failed: &[FileCheck]) -> Result<()> {
                         })
                     }).collect::<Vec<_>>()
                 });
-                if let Err(e) = ureq::post(url).send_json(&body) {
+                if let Err(e) = webhook_agent().post(url).send_json(&body) {
                     eprintln!("webhook post failed: {e}");
                 }
             }

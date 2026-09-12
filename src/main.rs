@@ -10,6 +10,7 @@ use sorseal::provenance::{Provenance, PROVENANCE_FILENAME};
 use sorseal::sign::ATTESTATION_FILENAME;
 use sorseal::{hook, onchain, report, runner, scaffold, sign, watch};
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 #[derive(Parser)]
@@ -289,6 +290,21 @@ fn max_code(a: u8, b: u8) -> u8 {
     a.max(b)
 }
 
+/// The project base is the manifest's own directory (Cargo-style), so
+/// `--manifest path/to/sorseal.toml` works from anywhere — artifact paths,
+/// build commands, the provenance file, and SARIF all resolve relative to the
+/// manifest, never the process CWD. Returns `(base dir, absolute manifest)`.
+fn manifest_base(manifest: &str) -> anyhow::Result<(PathBuf, PathBuf)> {
+    let cwd = std::env::current_dir()?;
+    let manifest_abs = cwd.join(manifest);
+    let dir = manifest_abs
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| cwd.clone());
+    Ok((dir, manifest_abs))
+}
+
 fn run(cli: Cli) -> anyhow::Result<u8> {
     match cli.command {
         Command::Init { project, force } => {
@@ -314,10 +330,10 @@ fn run(cli: Cli) -> anyhow::Result<u8> {
             allow_dirty,
             manifest,
         } => {
-            let cwd = std::env::current_dir()?;
-            let m = Manifest::load(&cwd.join(&manifest))?;
-            let p = runner::record(&m, &cwd, allow_dirty)?;
-            p.save(&cwd.join(PROVENANCE_FILENAME))?;
+            let (base, manifest_abs) = manifest_base(&manifest)?;
+            let m = Manifest::load(&manifest_abs)?;
+            let p = runner::record(&m, &base, allow_dirty)?;
+            p.save(&base.join(PROVENANCE_FILENAME))?;
             println!("{}", report::render_sealed(&m.project.name, &p));
             println!();
             println!("provenance written to {PROVENANCE_FILENAME}");
@@ -329,14 +345,14 @@ fn run(cli: Cli) -> anyhow::Result<u8> {
             provenance,
             sarif,
         } => {
-            let cwd = std::env::current_dir()?;
-            let m = Manifest::load(&cwd.join(&manifest))?;
-            let p = Provenance::load(&cwd.join(&provenance))?;
-            let (checks, all_pass) = runner::verify(&m, &p, &cwd)?;
+            let (base, manifest_abs) = manifest_base(&manifest)?;
+            let m = Manifest::load(&manifest_abs)?;
+            let p = Provenance::load(&base.join(&provenance))?;
+            let (checks, all_pass) = runner::verify(&m, &p, &base)?;
             println!("{}", report::render_verify(&m.project.name, &checks));
             if let Some(path) = sarif {
                 std::fs::write(
-                    cwd.join(&path),
+                    base.join(&path),
                     sorseal::sarif::render_sarif(&m.project.name, &checks),
                 )
                 .map_err(|e| anyhow::anyhow!("failed to write SARIF to {path}: {e}"))?;
@@ -580,7 +596,7 @@ fn run(cli: Cli) -> anyhow::Result<u8> {
             seal,
             ignore,
         } => {
-            let cwd = std::env::current_dir()?;
+            let (base, manifest_abs) = manifest_base(&manifest)?;
 
             // `--explain` is self-contained documentation: no scan runs.
             if explain.is_some() {
@@ -600,12 +616,12 @@ fn run(cli: Cli) -> anyhow::Result<u8> {
                 return Ok(0);
             }
 
-            let m = Manifest::load(&cwd.join(&manifest))?;
+            let m = Manifest::load(&manifest_abs)?;
             let ignore: Vec<&str> = ignore.iter().map(|s| s.as_str()).collect();
             let opts = analyze::AnalyzeOptions { no_ignore };
             let mut exit_code = 0;
             let mut provenance_for_seal = if seal {
-                let prov_path = cwd.join(&provenance);
+                let prov_path = base.join(&provenance);
                 if prov_path.exists() {
                     Some(Provenance::load(&prov_path)?)
                 } else {
@@ -627,12 +643,12 @@ fn run(cli: Cli) -> anyhow::Result<u8> {
                         continue;
                     }
                 }
-                let source_abs = cwd.join(&a.source_root);
+                let source_abs = base.join(&a.source_root);
                 let mut analysis = analyze::analyze_tree_with(&source_abs, &ignore, &opts)?;
                 // Optionally inspect the compiled binary itself, so the sealed
                 // artifact is verified rather than only its source.
                 if wasm {
-                    let wasm_path = cwd.join(&a.wasm_path);
+                    let wasm_path = base.join(&a.wasm_path);
                     match std::fs::read(&wasm_path) {
                         Ok(bytes) => match sorseal::wasm_scan::scan(&bytes) {
                             Ok(stats) => {
@@ -744,14 +760,14 @@ fn run(cli: Cli) -> anyhow::Result<u8> {
                     &all_findings,
                     &artifact_analyses,
                 );
-                std::fs::write(cwd.join(&sarif_path), json)
+                std::fs::write(base.join(&sarif_path), json)
                     .map_err(|e| anyhow::anyhow!("failed to write SARIF to {sarif_path}: {e}"))?;
                 println!();
                 println!("SARIF report written to {sarif_path}");
             }
 
             if let Some(p) = provenance_for_seal {
-                let prov_path = cwd.join(&provenance);
+                let prov_path = base.join(&provenance);
                 p.save(&prov_path)?;
                 println!();
                 println!("analysis digests sealed into {provenance}");

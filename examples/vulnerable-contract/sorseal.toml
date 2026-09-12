@@ -2,9 +2,10 @@
 #
 # This example exists to showcase `sorseal analyze`: the source_root covers
 # only this contract's directory, so analysis reports on THIS contract rather
-# than the surrounding repository. Run from examples/vulnerable-contract:
+# than the surrounding repository. Project paths (artifacts, build commands,
+# provenance) resolve relative to this file, so you can run from anywhere:
 #
-#     sorseal analyze
+#     sorseal analyze --manifest examples/vulnerable-contract/sorseal.toml
 #
 # The vulnerable contract contains Critical/High/Medium/Low Soroban patterns
 # (missing require_auth, reentrancy, unchecked arithmetic, panic on input) so
