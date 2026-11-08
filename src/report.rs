@@ -1,5 +1,6 @@
 //! Console, JSON, and Markdown rendering.
 
+use crate::drift;
 use crate::provenance::Provenance;
 use crate::runner::{short, Check, Outcome};
 
@@ -56,6 +57,55 @@ pub fn render_sealed(project: &str, p: &Provenance) -> String {
         "not a git repository".to_string()
     };
     lines.push(format!("toolchain {} · {git}", p.toolchain));
+    lines.join("\n")
+}
+
+/// Render a drift comparison as a pytest-style summary, matching the
+/// `verify` output shape: header, per-difference lines, blank, totals.
+pub fn render_drift(r: &drift::DriftReport) -> String {
+    let mut lines = vec![
+        format!("Sorseal — {} drift", r.project),
+        String::new(),
+        format!("  left   {}", r.left),
+        format!("  right  {}", r.right),
+        String::new(),
+    ];
+
+    for c in &r.context {
+        lines.push(format!("CONTEXT  {}  {} → {}", c.field, c.left, c.right));
+    }
+    if !r.context.is_empty() {
+        lines.push(String::new());
+    }
+
+    for e in &r.entries {
+        let label = match e.status {
+            drift::Status::Added => "ADDED  ",
+            drift::Status::Removed => "REMOVED",
+            drift::Status::Changed => "CHANGED",
+        };
+        lines.push(format!("{label}  {}", e.id));
+        for f in &e.fields {
+            lines.push(format!("         {}  {} → {}", f.field, f.left, f.right));
+        }
+    }
+
+    lines.push(String::new());
+    if r.identical {
+        lines.push("NO DRIFT — the two records match".to_string());
+    } else {
+        let total = r.counts.added + r.counts.removed + r.counts.changed + r.counts.context;
+        let noun = if total == 1 {
+            "difference"
+        } else {
+            "differences"
+        };
+        lines.push(format!(
+            "{total} {noun} — added: {} · removed: {} · changed: {} · context: {}",
+            r.counts.added, r.counts.removed, r.counts.changed, r.counts.context
+        ));
+        lines.push("DRIFT DETECTED".to_string());
+    }
     lines.join("\n")
 }
 
@@ -189,6 +239,90 @@ mod tests {
         let mut p = provenance();
         p.git.present = false;
         assert!(render_markdown(&p).contains("git commit: _not a git repository_"));
+    }
+
+    #[test]
+    fn render_drift_identical_says_no_drift() {
+        let r = drift::compare(
+            &subject(provenance()),
+            &subject(provenance()),
+            "a.json",
+            "b.json",
+        );
+        let out = render_drift(&r);
+        assert!(out.starts_with("Sorseal — demo|project drift"));
+        assert!(out.contains("NO DRIFT"));
+        assert!(!out.contains("DRIFT DETECTED"));
+        assert!(out.contains("  left   a.json"));
+        assert!(out.contains("  right  b.json"));
+    }
+
+    #[test]
+    fn render_drift_sums_and_labels_a_change() {
+        let mut b = provenance();
+        b.artifacts[0].wasm_sha256 = "0".repeat(64);
+        b.toolchain = "rustc 1.96.0".into();
+        let r = drift::compare(&subject(provenance()), &subject(b), "a", "b");
+        let out = render_drift(&r);
+        assert!(out.contains("CHANGED  echo"));
+        assert!(out.contains("wasm_sha256  "));
+        assert!(out.contains("CONTEXT  toolchain  rustc 1.95.0 → rustc 1.96.0"));
+        assert!(out.contains("DRIFT DETECTED"));
+        // One changed entry plus one context difference = two differences.
+        assert!(out.contains("2 differences — added: 0 · removed: 0 · changed: 1 · context: 1"));
+    }
+
+    #[test]
+    fn render_drift_pluralises_totals() {
+        // A single difference is singular.
+        let mut one = provenance();
+        one.artifacts[0].wasm_sha256 = "0".repeat(64);
+        let out = render_drift(&drift::compare(
+            &subject(provenance()),
+            &subject(one),
+            "a",
+            "b",
+        ));
+        assert!(out.contains("1 difference — added: 0 · removed: 0 · changed: 1 · context: 0"));
+
+        // Two changed artifacts are plural.
+        let mut two = provenance();
+        two.artifacts[0].wasm_sha256 = "0".repeat(64);
+        let mut extra = two.artifacts[0].clone();
+        extra.id = "second".into();
+        extra.wasm_sha256 = "1".repeat(64);
+        two.artifacts.push(extra);
+        let out2 = render_drift(&drift::compare(
+            &subject(provenance()),
+            &subject(two),
+            "a",
+            "b",
+        ));
+        assert!(out2.contains("2 differences — added: 1 · removed: 0 · changed: 1 · context: 0"));
+    }
+
+    #[test]
+    fn render_drift_marks_added_and_removed() {
+        let mut with_extra = provenance();
+        let mut second = with_extra.artifacts[0].clone();
+        second.id = "second".into();
+        with_extra.artifacts.push(second);
+        let r = drift::compare(
+            &subject(provenance()),
+            &subject(with_extra.clone()),
+            "a",
+            "b",
+        );
+        let out = render_drift(&r);
+        assert!(out.contains("ADDED    second"));
+        assert!(out.contains("(absent) → "));
+
+        let r2 = drift::compare(&subject(with_extra), &subject(provenance()), "a", "b");
+        assert!(render_drift(&r2).contains("REMOVED  second"));
+    }
+
+    fn subject(p: Provenance) -> drift::Subject {
+        drift::Subject::Provenance(p)
     }
 
     #[test]

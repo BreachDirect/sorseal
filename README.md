@@ -10,7 +10,7 @@
   <a href="https://github.com/BreachDirect/sorseal/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/rust-1.85+-orange.svg" alt="MSRV 1.85">
   <a href="https://github.com/BreachDirect/sorseal/actions/workflows/security.yml"><img src="https://github.com/BreachDirect/sorseal/actions/workflows/security.yml/badge.svg" alt="Security audit"></a>
-  <a href="https://github.com/BreachDirect/sorseal/blob/main/docs/WAVE_EVIDENCE_ToryMic.md"><img src="https://img.shields.io/badge/stellar-wave_9-6B3FA0.svg" alt="Wave 9"></a>
+  <a href="https://github.com/BreachDirect/sorseal/blob/main/docs/WAVE_EVIDENCE_ToryMic.md"><img src="https://img.shields.io/badge/stellar-wave_11-6B3FA0.svg" alt="Wave 11"></a>
 </p>
 
 ---
@@ -131,6 +131,7 @@ sorseal watch           # daemon mode with webhook alerts
 | `sorseal record` | Build artifacts, write `sorseal.provenance.json` |
 | `sorseal verify` | Rebuild and verify artifacts match sealed provenance |
 | `sorseal report` | Render provenance as console, JSON, or Markdown |
+| `sorseal drift` | Compare two sealed records and report what changed |
 | `sorseal keygen` | Generate an Ed25519 keypair for signing |
 | `sorseal sign` | Sign provenance as an in-toto/SLSA v1.0 attestation |
 | `sorseal verify-attestation` | Verify a signed attestation |
@@ -140,6 +141,54 @@ sorseal watch           # daemon mode with webhook alerts
 | `sorseal analyze` | Scan source for Soroban vulnerability patterns |
 | `sorseal watch` | Monitor files for integrity drift, alert on changes |
 | `sorseal hook` | Install/uninstall/status for a `verify + analyze` pre-commit hook |
+
+## Comparing sealed records
+
+`sorseal drift` answers a question `verify` cannot: *what changed between these two seals?* It takes any two of a sealed provenance (`sorseal.provenance.json`) and a manifest (`sorseal.toml`), and reports the difference entry by entry.
+
+```bash
+sorseal drift sorseal.provenance.json old/sorseal.provenance.json
+sorseal drift sorseal.toml sorseal.provenance.json   # has config drifted from the seal?
+sorseal drift a.json b.json --format json            # machine-readable
+```
+
+```
+Sorseal — demo-contract drift
+
+  left   sorseal.provenance.json
+  right  old/sorseal.provenance.json
+
+CONTEXT  toolchain  rustc 1.95.0 (59807616e) → rustc 1.96.0 (aaaa)
+
+CHANGED  demo-contract
+         wasm_sha256  1e87febffa91… → 000000000000…
+
+2 differences — added: 0 · removed: 0 · changed: 1 · context: 1
+DRIFT DETECTED
+```
+
+**Seal timestamps are ignored.** `built_at` and `analyzed_at` differ on every seal by construction, so two seals of an unchanged tree report `NO DRIFT` and exit `0`. Anything else that differs is reported, and the command exits `1` — so it can gate CI directly.
+
+| Exit code | Meaning |
+|---|---|
+| `0` | The two records match (timestamps excluded) |
+| `1` | Drift detected |
+| `2` | A file could not be read or parsed |
+
+### `--format json` fields
+
+| Field | Type | Meaning |
+|---|---|---|
+| `project` | string | Project name from the left-hand record |
+| `left`, `right` | string | The two paths as given on the command line |
+| `identical` | bool | `true` when nothing differs |
+| `counts` | object | `added`, `removed`, `changed`, `context` — totals per category |
+| `context` | array | Top-level differences: `{ field, left, right }` for `project`, `toolchain`, `git.commit`, `git.clean` |
+| `entries` | array | Per-artifact differences: `{ id, status, fields }` |
+| `entries[].status` | string | `"added"`, `"removed"` or `"changed"` |
+| `entries[].fields` | array | `{ field, left, right }`; a side with no value is `"(absent)"` |
+
+Compared per artifact: `command`, `wasm_path`, `source_root`, `wasm_sha256`, `wasm_size`, `source_sha256`, and `analysis.digest` / `analysis.findings` / `analysis.worst_severity` when an analysis has been sealed. Output is sorted by id then field name, so the same pair of inputs always renders byte-for-byte identically.
 
 ## Detection rules
 
@@ -187,6 +236,7 @@ Sorseal is the only tool in this table that ties source analysis to a **sealed, 
 sorseal init         ──→  sorseal.toml (manifest)
 sorseal record       ──→  build → hash (WASM + source + toolchain + git) → sorseal.provenance.json
 sorseal verify       ──→  rebuild → compare digests → PASSED/FAILED
+sorseal drift        ──→  diff two sealed records → ADDED/REMOVED/CHANGED (+ exit 1)
 sorseal analyze      ──→  lexical scan → findings (JSON/console/SARIF/Markdown)
 sorseal sign         ──→  Ed25519 DSSE envelope (in-toto/SLSA v1.0)
 sorseal onchain-*    ──→  getLedgerEntries/getEvents XDR → verify against provenance
@@ -207,9 +257,9 @@ This repository is part of a broader set of contributions to the Stellar / Sorob
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, code style, and PR process.
 
-### Getting involved in Wave 9
+### Getting involved in Wave 11
 
-This repository is a **Stellar Drips Wave 9** project. The quickest ways to contribute right now:
+This repository is a **Stellar Drips Wave 11** project. The quickest ways to contribute right now:
 
 1. **Pick up a `good-first-issue`** — issues labelled `good-first-issue` are scoped and small enough to land in a weekend.
 2. **Run `sorseal analyze` on your own contract** and file a bug/feature report with real output.
@@ -230,6 +280,7 @@ This repository is a **Stellar Drips Wave 9** project. The quickest ways to cont
 | CI severity gate (`--fail-on`) | shipped |
 | File integrity monitoring | shipped |
 | Prebuilt binary releases (Linux/macOS/Windows) | shipped |
+| Multi-release comparison (`sorseal drift`, console + JSON) | shipped |
 | **Detection engine** (data-flow awareness to cut heuristics → low-confidence) | in progress |
 | **Extensible rules** (team-local custom patterns via config) | in progress |
 | **`npx sorseal` wrapper + VS Code extension** | in progress |
