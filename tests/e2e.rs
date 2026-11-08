@@ -351,3 +351,123 @@ fn git_flow_record_verify_and_dirty_refusal() {
     );
     assert!(stdout(&ver).contains("reachable"));
 }
+
+#[test]
+fn drift_identical_records_exit_zero() {
+    let tmp = tempfile::tempdir().unwrap();
+    copy_fixture(tmp.path());
+    assert!(run(tmp.path(), &["record"]).status.success());
+
+    let out = run(
+        tmp.path(),
+        &[
+            "drift",
+            "sorseal.provenance.json",
+            "sorseal.provenance.json",
+        ],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "identical must exit 0:\n{}",
+        stdout(&out)
+    );
+    let text = stdout(&out);
+    assert!(text.contains("NO DRIFT"), "{text}");
+    assert!(!text.contains("DRIFT DETECTED"));
+}
+
+#[test]
+fn drift_detects_a_changed_seal() {
+    let tmp = tempfile::tempdir().unwrap();
+    copy_fixture(tmp.path());
+    assert!(run(tmp.path(), &["record"]).status.success());
+
+    // A second seal with a tampered digest must be reported as drift.
+    let mut prov = provenance(tmp.path());
+    prov["artifacts"][0]["wasm_sha256"] = "0".repeat(64).into();
+    fs::write(tmp.path().join("other.provenance.json"), prov.to_string()).unwrap();
+
+    let out = run(
+        tmp.path(),
+        &["drift", "sorseal.provenance.json", "other.provenance.json"],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "drift must exit 1:\n{}",
+        stdout(&out)
+    );
+    let text = stdout(&out);
+    assert!(text.contains("DRIFT DETECTED"), "{text}");
+    assert!(text.contains("CHANGED  echo"), "{text}");
+    assert!(text.contains("wasm_sha256"), "{text}");
+}
+
+#[test]
+fn drift_json_is_machine_readable() {
+    let tmp = tempfile::tempdir().unwrap();
+    copy_fixture(tmp.path());
+    assert!(run(tmp.path(), &["record"]).status.success());
+
+    let mut prov = provenance(tmp.path());
+    prov["artifacts"][0]["source_sha256"] = "1".repeat(64).into();
+    fs::write(tmp.path().join("other.provenance.json"), prov.to_string()).unwrap();
+
+    let out = run(
+        tmp.path(),
+        &[
+            "drift",
+            "sorseal.provenance.json",
+            "other.provenance.json",
+            "--format",
+            "json",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(1));
+
+    let doc: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("valid JSON");
+    assert_eq!(doc["identical"], false);
+    assert_eq!(doc["counts"]["changed"], 1);
+    assert_eq!(doc["entries"][0]["id"], "echo");
+    assert_eq!(doc["entries"][0]["status"], "changed");
+    let field = &doc["entries"][0]["fields"][0];
+    assert_eq!(field["field"], "source_sha256");
+    assert_eq!(field["left"].as_str().unwrap().len(), 64);
+    assert_eq!(field["right"], "1".repeat(64));
+}
+
+#[test]
+fn drift_compares_manifest_against_seal() {
+    let tmp = tempfile::tempdir().unwrap();
+    copy_fixture(tmp.path());
+    assert!(run(tmp.path(), &["record"]).status.success());
+
+    // The manifest shares command/wasm_path/source_root with the seal, so
+    // only the digests and recorded context differ.
+    let out = run(
+        tmp.path(),
+        &["drift", "sorseal.toml", "sorseal.provenance.json"],
+    );
+    assert_eq!(out.status.code(), Some(1));
+    let text = stdout(&out);
+    assert!(text.contains("CHANGED  echo"), "{text}");
+    assert!(text.contains("wasm_sha256"), "{text}");
+    // Shared config fields must not be reported as differences.
+    assert!(!text.contains("command  "), "{text}");
+    assert!(!text.contains("wasm_path  "), "{text}");
+}
+
+#[test]
+fn drift_rejects_a_missing_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    copy_fixture(tmp.path());
+
+    let out = run(
+        tmp.path(),
+        &["drift", "sorseal.provenance.json", "nope.json"],
+    );
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("failed to read"), "{err}");
+}

@@ -8,7 +8,7 @@ use sorseal::analyze;
 use sorseal::manifest::Manifest;
 use sorseal::provenance::{Provenance, PROVENANCE_FILENAME};
 use sorseal::sign::ATTESTATION_FILENAME;
-use sorseal::{hook, onchain, report, runner, scaffold, sign, watch};
+use sorseal::{drift, hook, onchain, report, runner, scaffold, sign, watch};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -67,6 +67,21 @@ enum Command {
         /// Output format
         #[arg(long, value_enum, default_value = "console")]
         format: ReportFormat,
+    },
+    /// Compare two sealed records and report what drifted
+    ///
+    /// Accepts two provenance records (`sorseal.provenance.json`), two
+    /// manifests (`sorseal.toml`), or one of each. Seal timestamps are
+    /// ignored, so two seals of an unchanged tree report NO DRIFT. Exits 1
+    /// when any difference is found, so it can gate CI.
+    Drift {
+        /// Left-hand record (provenance JSON or sorseal.toml)
+        left: String,
+        /// Right-hand record (provenance JSON or sorseal.toml)
+        right: String,
+        /// Output format
+        #[arg(long, value_enum, default_value = "console")]
+        format: DriftFormat,
     },
     /// Generate an Ed25519 keypair for signing attestations
     Keygen {
@@ -231,6 +246,12 @@ enum ReportFormat {
     Markdown,
 }
 
+#[derive(Clone, Copy, ValueEnum)]
+enum DriftFormat {
+    Console,
+    Json,
+}
+
 #[derive(Subcommand)]
 enum HookAction {
     /// Install a pre-commit hook (verify + analyze --fail-on High)
@@ -377,6 +398,26 @@ fn run(cli: Cli) -> anyhow::Result<u8> {
                 }
             }
             Ok(0)
+        }
+
+        Command::Drift {
+            left,
+            right,
+            format,
+        } => {
+            let cwd = std::env::current_dir()?;
+            let l = drift::Subject::load(&cwd.join(&left))?;
+            let r = drift::Subject::load(&cwd.join(&right))?;
+            let report = drift::compare(&l, &r, &left, &right);
+            match format {
+                DriftFormat::Console => {
+                    println!("{}", report::render_drift(&report));
+                }
+                DriftFormat::Json => {
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                }
+            }
+            Ok(if report.identical { 0 } else { 1 })
         }
 
         Command::Keygen { key, public_key } => {

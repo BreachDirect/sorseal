@@ -5,8 +5,9 @@ Prebuilt binaries (Linux/macOS/Windows) are uploaded on every tagged release by
 
 ## v0.2.1 (2026-09-12)
 
-Released on crates.io. No GitHub tag or binaries — a fixes-only patch after
-`v0.2.0`:
+Released on crates.io; the GitHub tag and five platform binaries were added
+later (2026-11-08) so the release matches what crates.io publishes. A
+fixes-only patch after `v0.2.0`:
 
 - **Manifest-relative paths.** All project paths (artifacts, build commands,
   provenance, SARIF) resolve relative to the manifest file, not the process

@@ -1,4 +1,4 @@
-# New good-first-issues (Wave 9) — draft index
+# New good-first-issues (Wave 11) — draft index
 
 This index tracks the *currently open* good-first-issues for sorseal. Issues
 whose drafts shipped are removed from this table (we keep their salt in
