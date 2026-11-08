@@ -245,7 +245,7 @@ sorseal watch        ──→  hash baseline → drift detection → Discord/Te
 
 ## Ecosystem work & Wave evidence
 
-This repository is part of a broader set of contributions to the Stellar / Soroban ecosystem. See [WAVE_EVIDENCE_ToryMic.md](docs/WAVE_EVIDENCE_ToryMic.md) for a curated list of related projects, demos, and tooling maintained by ToryMic, including testing, indexers, contract frameworks, and privacy/payment prototypes.
+This repository is part of a broader set of contributions to the Stellar / Soroban ecosystem. See [WAVE_EVIDENCE_ToryMic.md](docs/WAVE_EVIDENCE_ToryMic.md) for a short, verifiable record of the finished work — each item links to a repository you can open, run, and test.
 
 - Evidence file: [WAVE_EVIDENCE_ToryMic.md](docs/WAVE_EVIDENCE_ToryMic.md)
 - Release notes: [RELEASES.md](RELEASES.md)

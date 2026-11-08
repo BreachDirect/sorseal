@@ -3,8 +3,10 @@
 A short, honest record of my finished work in the Stellar / Soroban ecosystem.
 
 - **sorseal** — this repository. Provenance + static security analyzer for
-  Soroban/WASM: 16 rules, 120 tests across three OSes, released as v0.2.0 with
-  a GitHub Action and a published crates.io crate.
+  Soroban/WASM: 16 rules and a sealed-provenance `drift` comparison, 141 tests
+  across Linux/macOS/Windows, released as v0.2.2 with a GitHub Action and a
+  published crates.io crate. CI is green, including `cargo audit` and
+  `cargo deny`.
   https://github.com/BreachDirect/sorseal
 - **schemalock** — declarative API contract test harness for Stellar backends;
   Python + Rust ports with a CI parity gate. Actively maintained.
